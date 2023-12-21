@@ -1,0 +1,2 @@
+Best eval loss epoch: 1
+Best eval loss: 0.0
