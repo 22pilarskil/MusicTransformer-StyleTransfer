@@ -10,8 +10,58 @@ from utilities.device import cpu_device
 
 SEQUENCE_START = 0
 
-# EPianoDataset
+
 class EPianoDataset(Dataset):
+    def __init__(self, root_path, max_seq=2048, random_seq=True):
+        self.max_seq = max_seq
+        self.class_directories = {d: os.path.join(root_path, d) for d in os.listdir(root_path) if os.path.isdir(os.path.join(root_path, d))}
+        self.class_files = {class_name: [os.path.join(dir_path, f) for f in os.listdir(dir_path) if os.path.isfile(os.path.join(dir_path, f))] for class_name, dir_path in self.class_directories.items()}
+        self.used_files = set()
+
+    def __len__(self):
+        return min(len(files) for files in self.class_files.values())
+    
+    def __getitem__(self, idx):
+
+        class_choices = list(self.class_files.keys())
+        positive_class = random.choice(class_choices)
+        class_choices.remove(positive_class)
+        negative_class = random.choice(class_choices)
+
+        positive_file = self._select_file(self.class_files[positive_class])
+        negative_file = self._select_file(self.class_files[negative_class])
+
+        positive_id = list(self.class_files.keys()).index(positive_class)
+        negative_id = list(self.class_files.keys()).index(negative_class)
+        positive_sample = self._process_file(positive_file) + [positive_id]
+        negative_sample = self._process_file(negative_file) + [negative_id]
+        
+        sample = [positive_sample, negative_sample] 
+        return sample
+
+    def _select_file(self, file_list):
+        available_files = list(set(file_list) - self.used_files)
+        if not available_files:
+            # Reset if all files have been used
+            self.used_files.clear()
+            available_files = file_list
+
+        selected_file = random.choice(available_files)
+        self.used_files.add(selected_file)
+        return selected_file
+
+    def _process_file(self, file_path):
+        i_stream    = open(file_path, "rb")
+        raw_data = pickle.load(i_stream)
+        i_stream.close()
+        raw_data = torch.tensor(raw_data, dtype=TORCH_LABEL_TYPE, device=cpu_device())
+        # Assuming process_midi is a function to process your midi data
+        x, tgt = process_midi(raw_data, self.max_seq)
+        return [x, tgt]
+
+
+# EPianoDataset
+class TripletSelector(Dataset):
     def __init__(self, root_path, max_seq=2048, random_seq=True):
         self.max_seq = max_seq
         self.class_directories = {d: os.path.join(root_path, d) for d in os.listdir(root_path) if os.path.isdir(os.path.join(root_path, d))}
@@ -59,71 +109,6 @@ class EPianoDataset(Dataset):
         # Assuming process_midi is a function to process your midi data
         x, tgt = process_midi(raw_data, self.max_seq)
         return [x, tgt]
-
-class oldEPianoDataset(Dataset):
-    """
-    ----------
-    Author: Damon Gwinn
-    ----------
-    Pytorch Dataset for the Maestro e-piano dataset (https://magenta.tensorflow.org/datasets/maestro).
-    Recommended to use with Dataloader (https://pytorch.org/docs/stable/data.html#torch.utils.data.DataLoader)
-
-    Uses all files found in the given root directory of pre-processed (preprocess_midi.py)
-    Maestro midi files.
-    ----------
-    """
-
-    def __init__(self, root, max_seq=2048, random_seq=True):
-        self.root       = root
-        self.max_seq    = max_seq
-        self.random_seq = random_seq
-
-        fs = [os.path.join(root, f) for f in os.listdir(self.root)]
-        self.data_files = [f for f in fs if os.path.isfile(f)]
-        #self.data_files = [self.data_files[0]]
-
-    # __len__
-    def __len__(self):
-        """
-        ----------
-        Author: Damon Gwinn
-        ----------
-        How many data files exist in the given directory
-        ----------
-        """
-
-        return len(self.data_files)
-
-    # __getitem__
-    def __getitem__(self, idx):
-        """
-        ----------
-        Author: Damon Gwinn
-        ----------
-        Gets the indexed midi batch. Gets random sequence or from start depending on random_seq.
-
-        Returns the input and the target.
-        ----------
-        """
-
-        # All data on cpu to allow for the Dataloader to multithread
-        i_stream    = open(self.data_files[idx], "rb")
-        # return pickle.load(i_stream), None
-        raw_data = pickle.load(i_stream)
-        if len(raw_data) != 4:
-            raw_mid     = torch.tensor(raw_data, dtype=TORCH_LABEL_TYPE, device=cpu_device())
-            i_stream.close()
-            x, tgt = process_midi(raw_mid, self.max_seq, self.random_seq)
-            return [[x, tgt]]
-        raw_mid     = torch.tensor(raw_data[:3], dtype=TORCH_LABEL_TYPE, device=cpu_device())
-        i_stream.close()
-        vals = []
-        for mid in raw_mid[:3]:
-            x, tgt = process_midi(mid, self.max_seq, self.random_seq)
-            vals.append([x,tgt])
-        vals.append(raw_data[3])
-
-        return vals
 
 
 class EmbeddingsDataset(Dataset):
@@ -244,6 +229,21 @@ def create_epiano_datasets(dataset_root, max_seq, random_seq=True):
     test_dataset = EPianoDataset(test_root, max_seq, random_seq)
 
     return train_dataset, val_dataset, test_dataset
+
+
+def create_triplet_datasets(dataset_root, max_seq, random_seq=True):
+
+    train_root = os.path.join(dataset_root, "train")
+    val_root = os.path.join(dataset_root, "val")
+    test_root = os.path.join(dataset_root, "test")
+
+    train_dataset = TripletSelector(train_root, max_seq, random_seq)
+    val_dataset = TripletSelector(val_root, max_seq, random_seq)
+    test_dataset = TripletSelector(test_root, max_seq, random_seq)
+
+    return train_dataset, val_dataset, test_dataset
+
+
 
 
 def create_embedding_datasets(dataset_root):

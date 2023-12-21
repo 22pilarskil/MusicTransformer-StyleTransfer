@@ -7,7 +7,7 @@ from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
 from torch.optim import Adam
 
-from dataset.e_piano import create_epiano_datasets, compute_epiano_accuracy
+from dataset.e_piano import create_triplet_datasets, create_epiano_datasets, compute_epiano_accuracy
 
 from model.music_transformer import MusicTransformer
 from model.loss import SmoothCrossEntropyLoss
@@ -20,6 +20,7 @@ from utilities.run_model import train_epoch, eval_model
 
 CSV_HEADER = ["Epoch", "Learn rate", "Avg Train loss", "Train Accuracy", "Train TL", "Avg Eval loss", "Eval accuracy", "Eval TL"]
 
+start = 1
 # Baseline is an untrained epoch that we evaluate as a baseline loss and accuracy
 BASELINE_EPOCH = -1
 # main
@@ -67,11 +68,12 @@ def main():
         tensorboard_summary = SummaryWriter(log_dir=tensorboad_dir)
 
     ##### Datasets #####
-    train_dataset, val_dataset, test_dataset = create_epiano_datasets(args.input_dir, args.max_sequence)
+    train_dataset, _, _ = create_epiano_datasets(args.input_dir, args.max_sequence)
+    eval_train_dataset, eval_test_dataset, _ = create_triplet_datasets(args.input_dir, args.max_sequence)
 
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, num_workers=args.n_workers, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, num_workers=args.n_workers)
-    test_loader = DataLoader(test_dataset, batch_size=args.batch_size, num_workers=args.n_workers)
+    eval_train_loader = DataLoader(eval_train_dataset, batch_size=args.batch_size, num_workers=args.n_workers)
+    eval_test_loader = DataLoader(eval_test_dataset, batch_size=args.batch_size, num_workers=args.n_workers)
     model = MusicTransformer(n_layers=args.n_layers, num_heads=args.num_heads,
                 feature_size=args.feature_size, d_model=args.d_model, dim_feedforward=args.dim_feedforward, dropout=args.dropout,
                 max_sequence=args.max_sequence, rpr=args.rpr).to(get_device())
@@ -88,7 +90,7 @@ def main():
     check_grads(model)
  
     ##### Continuing from previous training session #####
-    start_epoch = 1+ BASELINE_EPOCH
+    start_epoch = start + BASELINE_EPOCH
     if(args.continue_weights is not None):
         if(args.continue_epoch is None):
             print("ERROR: Need epoch number to continue from (-continue_epoch) when using continue_weights")
@@ -161,8 +163,8 @@ def main():
             print("Baseline model evaluation (Epoch 0):")
 
         # Eval
-        train_loss, train_acc, train_triplet_loss = eval_model(model, train_loader, train_loss_func, args.feature_size)
-        eval_loss, eval_acc, eval_triplet_loss = eval_model(model, test_loader, eval_loss_func, args.feature_size)
+        train_loss, train_acc, train_triplet_loss = eval_model(model, eval_train_loader, train_loss_func, args.feature_size)
+        eval_loss, eval_acc, eval_triplet_loss = eval_model(model, eval_test_loader, eval_loss_func, args.feature_size)
 
         # Learn rate
         lr = get_lr(opt)

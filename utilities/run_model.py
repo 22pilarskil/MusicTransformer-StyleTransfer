@@ -22,8 +22,47 @@ from torch.cuda.amp import GradScaler, autocast
 import torch.nn.functional as F
 scaler = GradScaler()
 
-triplet_loss_fn = torch.nn.TripletMarginLoss(margin=0.2, p=2)
+MARGIN = 1.0
+triplet_loss_fn = torch.nn.TripletMarginLoss(margin=MARGIN, p=2)
 torch.autograd.set_detect_anomaly(True)
+
+
+
+def create_triplet_mask(labels):
+    # Expand labels to create a 3D mask for triplets
+    labels = labels.unsqueeze(1)  # Shape: (batch_size, 1)
+    mask_anchor_positive = labels == labels.T  # Anchor and Positive of
+    mask_anchor_negative = labels != labels.T  # Anchor and Negative of
+
+    # Combine masks to find valid triplets
+    valid_triplets = mask_anchor_positive.unsqueeze(2) & mask_anchor_negative.unsqueeze(1)
+    valid_triplet_indices = valid_triplets.nonzero(as_tuple=False)
+    valid_triplet_indices = valid_triplet_indices[valid_triplet_indices[:, 0] != valid_triplet_indices[:, 1]]
+    return valid_triplet_indices
+
+
+def compute_triplet_distances(embeddings, labels, margin, top_k=10):
+    triplet_indices = create_triplet_mask(labels)
+    print(len(triplet_indices))
+    anchor_embeddings = embeddings[triplet_indices[:, 0]]
+    positive_embeddings = embeddings[triplet_indices[:, 1]]
+    negative_embeddings = embeddings[triplet_indices[:, 2]]
+
+    pos_dist = torch.nn.functional.pairwise_distance(anchor_embeddings, positive_embeddings, p=2)
+    neg_dist = torch.nn.functional.pairwise_distance(anchor_embeddings, negative_embeddings, p=2)
+
+    hard_triplet_mask = (pos_dist - neg_dist + margin > 0)
+    valid_indices = triplet_indices[hard_triplet_mask]
+
+    # Calculate distances for hard triplets and select top k hardest
+    if len(valid_indices) == 0:
+        return []
+
+    distances = pos_dist[hard_triplet_mask] - neg_dist[hard_triplet_mask]
+    _, top_indices = distances.topk(min(top_k, len(distances)), largest=True)
+    top_triplet_indices = valid_indices[top_indices]
+    print(len(top_triplet_indices))
+    return top_triplet_indices
 
 # train_epoch
 def train_epoch(cur_epoch, model, dataloader, loss, opt, lr_scheduler=None, print_modulus=1, feature_size=0):
@@ -48,17 +87,19 @@ def train_epoch(cur_epoch, model, dataloader, loss, opt, lr_scheduler=None, prin
             opt.zero_grad()
             gc.collect()
             style_embeddings = []
+            labels = []
             total_loss = 0
-            print(batch[3], feature_size)
-            for num, sample in enumerate(batch[:3]):
+            for num, sample in enumerate(batch):
+                print(len(batch))
                 x = sample[0].to(get_device())
                 tgt = sample[1].to(get_device())
-                print(x.shape)      	        
+                label = sample[2].to(get_device())
+
                 if True: #with autocast():
                     y, style_embedding, positional_embedding = model(x)
-                    print(y.shape)
                     if feature_size:
-                        style_embeddings.append(y)
+                        labels.append(label)
+                        style_embeddings.append(y.to('cpu'))
                     else:
                         style_embeddings.append(style_embedding)
                         y = y.reshape(y.shape[0] * y.shape[1], -1)
@@ -66,10 +107,20 @@ def train_epoch(cur_epoch, model, dataloader, loss, opt, lr_scheduler=None, prin
                         out = loss.forward(y, tgt)
                         total_loss += out  # Store the item for logging
                         del out
-            triplet_loss = triplet_loss_fn(style_embeddings[0], style_embeddings[1], style_embeddings[2])
             if feature_size:
-                combined_loss = triplet_loss
+                style_embeddings = [j.reshape(1, feature_size) for i in style_embeddings for j in i]
+                labels = [j for i in labels for j in i]
+                embeddings = torch.cat(style_embeddings, dim=0)
+                labels = torch.tensor(labels)
+                top_hard_triplets = compute_triplet_distances(embeddings, labels, MARGIN)
+                top_anchor_embeddings = embeddings[top_hard_triplets[:, 0]]
+                top_positive_embeddings = embeddings[top_hard_triplets[:, 1]]
+                top_negative_embeddings = embeddings[top_hard_triplets[:, 2]]
+                triplet_loss = triplet_loss_fn(top_anchor_embeddings, top_positive_embeddings, top_negative_embeddings)
+                print(triplet_loss)
+                combined_loss = triplet_loss.to("cuda:0")
             else:
+                triplet_loss = triplet_loss_fn(style_embeddings[0], style_embeddings[1], style_embeddings[2])
                 combined_loss = total_loss + triplet_loss
             scaler.scale(combined_loss).backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
@@ -103,11 +154,6 @@ def train_epoch(cur_epoch, model, dataloader, loss, opt, lr_scheduler=None, prin
         except StopIteration:
             print(f"EPOCH {cur_epoch} finished!")
             break  # End of the dataset
-        except ValueError as e:
-            print(f"Skipping batch {batch_num+1} due to error: {e}")
-            batch_num += 1
-            skipped += 1
-            continue  # Skip to the next batch
 
     return
 
