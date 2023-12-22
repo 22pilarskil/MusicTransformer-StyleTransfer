@@ -20,7 +20,7 @@ from utilities.run_model import train_epoch, eval_model
 
 CSV_HEADER = ["Epoch", "Learn rate", "Avg Train loss", "Train Accuracy", "Train TL", "Avg Eval loss", "Eval accuracy", "Eval TL"]
 
-start = 1
+start = 0
 # Baseline is an untrained epoch that we evaluate as a baseline loss and accuracy
 BASELINE_EPOCH = -1
 # main

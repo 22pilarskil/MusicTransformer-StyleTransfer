@@ -29,21 +29,18 @@ torch.autograd.set_detect_anomaly(True)
 
 
 def create_triplet_mask(labels):
-    # Expand labels to create a 3D mask for triplets
     labels = labels.unsqueeze(1)  # Shape: (batch_size, 1)
     mask_anchor_positive = labels == labels.T  # Anchor and Positive of
     mask_anchor_negative = labels != labels.T  # Anchor and Negative of
 
-    # Combine masks to find valid triplets
     valid_triplets = mask_anchor_positive.unsqueeze(2) & mask_anchor_negative.unsqueeze(1)
     valid_triplet_indices = valid_triplets.nonzero(as_tuple=False)
     valid_triplet_indices = valid_triplet_indices[valid_triplet_indices[:, 0] != valid_triplet_indices[:, 1]]
     return valid_triplet_indices
 
 
-def compute_triplet_distances(embeddings, labels, margin, top_k=10):
+def compute_triplet_distances(embeddings, labels, margin, return_all=True):
     triplet_indices = create_triplet_mask(labels)
-    print(len(triplet_indices))
     anchor_embeddings = embeddings[triplet_indices[:, 0]]
     positive_embeddings = embeddings[triplet_indices[:, 1]]
     negative_embeddings = embeddings[triplet_indices[:, 2]]
@@ -51,18 +48,21 @@ def compute_triplet_distances(embeddings, labels, margin, top_k=10):
     pos_dist = torch.nn.functional.pairwise_distance(anchor_embeddings, positive_embeddings, p=2)
     neg_dist = torch.nn.functional.pairwise_distance(anchor_embeddings, negative_embeddings, p=2)
 
+    semi_hard_triplet_mask = (neg_dist > pos_dist) & (neg_dist < pos_dist + margin)
     hard_triplet_mask = (pos_dist - neg_dist + margin > 0)
-    valid_indices = triplet_indices[hard_triplet_mask]
 
-    # Calculate distances for hard triplets and select top k hardest
-    if len(valid_indices) == 0:
-        return []
+    zero_loss_triplets = ~(semi_hard_triplet_mask | (pos_dist - neg_dist + margin > 0))
+    zero_loss_count = zero_loss_triplets.sum().item()
+    print("Zero Loss Triplets:", zero_loss_count)
 
-    distances = pos_dist[hard_triplet_mask] - neg_dist[hard_triplet_mask]
-    _, top_indices = distances.topk(min(top_k, len(distances)), largest=True)
-    top_triplet_indices = valid_indices[top_indices]
-    print(len(top_triplet_indices))
-    return top_triplet_indices
+    if return_all:
+        combined_mask = semi_hard_triplet_mask | hard_triplet_mask
+        valid_indices = triplet_indices[combined_mask]
+    else:
+        valid_indices = triplet_indices[semi_hard_triplet_mask] if semi_hard_triplet_mask.any() else triplet_indices[hard_triplet_mask]
+
+    print(f"Computing {len(valid_indices)} / {len(triplet_indices)}")
+    return valid_indices
 
 # train_epoch
 def train_epoch(cur_epoch, model, dataloader, loss, opt, lr_scheduler=None, print_modulus=1, feature_size=0):
@@ -113,6 +113,11 @@ def train_epoch(cur_epoch, model, dataloader, loss, opt, lr_scheduler=None, prin
                 embeddings = torch.cat(style_embeddings, dim=0)
                 labels = torch.tensor(labels)
                 top_hard_triplets = compute_triplet_distances(embeddings, labels, MARGIN)
+                if top_hard_triplets is None:
+                    print("CONTINUING")
+                    del style_embeddings, labels, embeddings
+                    torch.cuda.empty_cache()
+                    continue
                 top_anchor_embeddings = embeddings[top_hard_triplets[:, 0]]
                 top_positive_embeddings = embeddings[top_hard_triplets[:, 1]]
                 top_negative_embeddings = embeddings[top_hard_triplets[:, 2]]
