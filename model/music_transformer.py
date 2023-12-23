@@ -44,6 +44,8 @@ class MusicTransformer(nn.Module):
         self.rpr        = rpr
         self.style_layer = style_layer
         self.feature_size = feature_size
+        self.reduction_factor = 4
+        self.transition_features = 64
 
         # Input embedding
         self.embedding = nn.Embedding(VOCAB_SIZE, self.d_model)
@@ -72,15 +74,10 @@ class MusicTransformer(nn.Module):
 
 
         if self.feature_size:
-            self.conv1 = nn.Conv1d(in_channels=512, out_channels=256, kernel_size=3, stride=1, padding=1)
-            self.conv2 = nn.Conv1d(in_channels=256, out_channels=16, kernel_size=3, stride=1, padding=1)
-
-            # Flattening
             self.flatten = nn.Flatten()
-
-            # Linear layers
-            self.fc1 = nn.Linear(self.max_seq * 16, 512)
-            self.fc2 = nn.Linear(512, 128)
+            self.linear = nn.Linear(in_features=512, out_features=self.reduction_factor)
+            self.conv1d = nn.Conv1d(in_channels=self.reduction_factor, out_channels=self.transition_features, kernel_size=3, stride=1, padding=1)
+            self.Wout = nn.Linear(in_features=self.transition_features * self.max_seq, out_features=self.feature_size)
         else:
             self.Wout       = nn.Linear(self.d_model, VOCAB_SIZE)
 
@@ -116,21 +113,19 @@ class MusicTransformer(nn.Module):
         style_embedding = self.transformer_style(src=positional_embedding, tgt=positional_embedding, src_mask=mask_style)
 
         x_out = self.transformer_main(src=style_embedding, tgt=style_embedding, src_mask=mask_main)
+        print(x_out.shape)
         x_out = x_out.permute(1,0,2)
         # Back to (batch_size, max_seq, d_model)
         if (self.feature_size):
-            x = x_out.permute(0, 2, 1)
-            x = self.conv1(x)
+            x = self.linear(x_out)
             x = nn.ReLU()(x)
-            x = self.conv2(x)
+            x = x.permute(0, 2, 1)
+            x = self.conv1d(x)
             x = nn.ReLU()(x)
-
-            # Flatten and apply linear layers
             x = self.flatten(x)
-            x = self.fc1(x)
             x = nn.ReLU()(x)
-            y = self.fc2(x)
-        else:     
+            y = self.Wout(x)
+        else: 
             y = self.Wout(x_out)
         del mask
         # They are trained to predict the next note in sequence (we don't need the last one)

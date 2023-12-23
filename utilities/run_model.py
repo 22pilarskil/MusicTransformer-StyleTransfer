@@ -22,7 +22,7 @@ from torch.cuda.amp import GradScaler, autocast
 import torch.nn.functional as F
 scaler = GradScaler()
 
-MARGIN = 2.0
+MARGIN = 1.0
 triplet_loss_fn = torch.nn.TripletMarginLoss(margin=MARGIN, p=2)
 torch.autograd.set_detect_anomaly(True)
 
