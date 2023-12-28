@@ -22,7 +22,7 @@ from torch.cuda.amp import GradScaler, autocast
 import torch.nn.functional as F
 scaler = GradScaler()
 
-MARGIN = 2.0
+MARGIN = 1.0
 triplet_loss_fn = torch.nn.TripletMarginLoss(margin=MARGIN, p=2)
 torch.autograd.set_detect_anomaly(True)
 
@@ -39,7 +39,7 @@ def create_triplet_mask(labels):
     return valid_triplet_indices
 
 
-def compute_triplet_distances(embeddings, labels, margin, return_all=True):
+def compute_triplet_distances(embeddings, labels, margin, return_all=False):
     triplet_indices = create_triplet_mask(labels)
     anchor_embeddings = embeddings[triplet_indices[:, 0]]
     positive_embeddings = embeddings[triplet_indices[:, 1]]
@@ -90,43 +90,29 @@ def train_epoch(cur_epoch, model, dataloader, loss, opt, lr_scheduler=None, prin
             labels = []
             total_loss = 0
             for num, sample in enumerate(batch):
-                print(len(batch))
+                label = sample[2].to(get_device())
                 x = sample[0].to(get_device())
                 tgt = sample[1].to(get_device())
-                label = sample[2].to(get_device())
 
-                if True: #with autocast():
-                    y, style_embedding, positional_embedding = model(x)
-                    if feature_size:
-                        labels.append(label)
-                        style_embeddings.append(y.to('cpu'))
-                    else:
-                        style_embeddings.append(style_embedding)
-                        y = y.reshape(y.shape[0] * y.shape[1], -1)
-                        tgt = tgt.flatten()
-                        out = loss.forward(y, tgt)
-                        total_loss += out  # Store the item for logging
-                        del out
-            if feature_size:
-                style_embeddings = [j.reshape(1, feature_size) for i in style_embeddings for j in i]
-                labels = [j for i in labels for j in i]
-                embeddings = torch.cat(style_embeddings, dim=0)
-                labels = torch.tensor(labels)
-                top_hard_triplets = compute_triplet_distances(embeddings, labels, MARGIN)
-                if top_hard_triplets is None:
-                    print("CONTINUING")
-                    del style_embeddings, labels, embeddings
-                    torch.cuda.empty_cache()
-                    continue
-                top_anchor_embeddings = embeddings[top_hard_triplets[:, 0]]
-                top_positive_embeddings = embeddings[top_hard_triplets[:, 1]]
-                top_negative_embeddings = embeddings[top_hard_triplets[:, 2]]
-                triplet_loss = triplet_loss_fn(top_anchor_embeddings, top_positive_embeddings, top_negative_embeddings)
-                print(triplet_loss)
-                combined_loss = triplet_loss.to("cuda:0")
-            else:
-                triplet_loss = triplet_loss_fn(style_embeddings[0], style_embeddings[1], style_embeddings[2])
-                combined_loss = total_loss + triplet_loss
+                with autocast():
+                    y = model(x)
+                    raise ValueError("StOP")
+                    labels.append(label)
+                    style_embeddings.append(y.to('cpu'))
+            style_embeddings = [j.reshape(1, feature_size) for i in style_embeddings for j in i]
+            labels = [j for i in labels for j in i]
+            embeddings = torch.cat(style_embeddings, dim=0)
+            labels = torch.tensor(labels)
+            top_hard_triplets = compute_triplet_distances(embeddings, labels, MARGIN)
+
+            top_anchor_embeddings = embeddings[top_hard_triplets[:, 0]]
+            top_positive_embeddings = embeddings[top_hard_triplets[:, 1]]
+            top_negative_embeddings = embeddings[top_hard_triplets[:, 2]]
+
+            triplet_loss = triplet_loss_fn(top_anchor_embeddings, top_positive_embeddings, top_negative_embeddings)
+            print(triplet_loss)
+            combined_loss = triplet_loss.to("cuda:0")
+
             scaler.scale(combined_loss).backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
             scaler.step(opt)
@@ -179,7 +165,7 @@ def eval_model(model, dataloader, loss, feature_size=0):
     batch_num = 0
     with torch.set_grad_enabled(False):
         n_test      = len(dataloader)
-        sum_loss   = 0.0
+        sum_loss   = []
         sum_acc    = 0.0
         sum_triplet_loss = 0.0
         dataloader_iter = iter(dataloader)
@@ -193,18 +179,8 @@ def eval_model(model, dataloader, loss, feature_size=0):
                     tgt = sample[1].to(get_device())
              
                     if True: #with autocast():
-                        y, style_embedding, positional_embedding = model(x)
-                        if feature_size:
-                            style_embeddings.append(y)
-                        else:
-                            style_embeddings.append(style_embedding)
-                            sum_acc += float(compute_epiano_accuracy(y, tgt)) / num_samples
- 
-                            y = y.reshape(y.shape[0] * y.shape[1], -1)
-                            tgt = tgt.flatten()
-        
-                            out = loss.forward(y, tgt)
-                            sum_loss += float(out) / num_samples
+                        y = model(x)
+                        style_embeddings.append(y)
 
                 triplet_loss = triplet_loss_fn(style_embeddings[0], style_embeddings[1], style_embeddings[2])
                 sum_triplet_loss += float(triplet_loss)
@@ -213,11 +189,9 @@ def eval_model(model, dataloader, loss, feature_size=0):
 
             except StopIteration:
                 break  # End of the dataset
-            except ValueError as e:
-                print(f"Skipping batch {batch_num+1} due to error: {e}")
-                continue  # Skip to the next batch
-
-        avg_loss    = sum_loss / n_test
+        sum_loss = np.array(sum_loss)
+        nan_count = np.sum(np.isnan(sum_loss))
+        avg_loss = np.nansum(sum_loss) / ((n_test * 3) - nan_count)
         avg_acc     = sum_acc / n_test
         avg_triplet_loss = sum_triplet_loss / n_test
 
@@ -244,8 +218,7 @@ def eval_triplets(model, dataloader, iterations=40):
         sum_acc    = 0.0
         sum_triplet_loss = 0.0
         dataloader_iter = iter(dataloader)
-        jazz_embeddings = []
-        classical_embeddings = []
+        embeddings = {}
         while True:
             try:
                 batch = next(dataloader_iter)
@@ -256,22 +229,23 @@ def eval_triplets(model, dataloader, iterations=40):
 
                     x = sample[0].to(get_device())
                     tgt = sample[1].to(get_device())
-
-                    y, style_embedding, positional_embedding = model(x)
+                    print(x.shape)
+                    y = model(x)
                     style_embeddings.append(y.flatten().cpu().numpy())
                     style_embeddings_tensor.append(y)
                     # style_embeddings.append(style_embedding.flatten().cpu().numpy())
                 triplet_loss = triplet_loss_fn(style_embeddings_tensor[0], style_embeddings_tensor[1], style_embeddings_tensor[2])                
                 print("TRIPLET LOSS", triplet_loss)
 
-                if "jazz" in batch[3]:
-                    jazz_embeddings.extend(style_embeddings[:2])
-                    classical_embeddings.append(style_embeddings[2])
-                elif "classical" in batch[3]:
-                    classical_embeddings.extend(style_embeddings[:2])
-                    jazz_embeddings.append(style_embeddings[2])
-                else:
-                    raise ValueError("Invalid label:", batch[3], batch_num)
+                positive = batch[3][0]
+                negative = batch[4][0]
+                if not positive in embeddings:
+                    embeddings[positive] = []
+                if not negative in embeddings:
+                    embeddings[negative] = []
+                
+                embeddings[positive].extend(style_embeddings[:2])
+                embeddings[negative].extend([style_embeddings[2]])
 
                 batch_num += 1
                 print("BATCH_NUM", batch_num)
@@ -280,37 +254,33 @@ def eval_triplets(model, dataloader, iterations=40):
 
             except StopIteration:
                 break  # End of the dataset
-        jazz_embeddings_tensors = [torch.tensor(emb) for emb in jazz_embeddings]
-        embedding_stack = torch.stack(jazz_embeddings_tensors)
-        norms = torch.norm(embedding_stack, p=2, dim=1)
-        variance = torch.var(norms)
-        print("NORM", norms)
-        print("VARIANCE", variance)
 
-        classical_embeddings_tensors = [torch.tensor(emb) for emb in classical_embeddings]
-        embedding_stack = torch.stack(classical_embeddings_tensors)
-        norms = torch.norm(embedding_stack, p=2, dim=1)
-        variance = torch.var(norms)
-        print("NORM", norms)
-        print("VARIANCE", variance)
-
-        all_embeddings = np.concatenate([jazz_embeddings, classical_embeddings])
+        for key, value in embeddings.items():
+            print(f"{key}: {np.array(value).shape}")
+        all_embeddings = np.concatenate(list(embeddings.values()))
         tsne = TSNE(n_components=2, random_state=42, perplexity=30, method="barnes_hut")
         reduced_embeddings = tsne.fit_transform(all_embeddings)
-        #reduced_embeddings = all_embeddings
-        kmeans = KMeans(n_clusters=2)
-        kmeans.fit(reduced_embeddings)
-        jazz_reduced = reduced_embeddings[:len(jazz_embeddings)]
-        classical_reduced = reduced_embeddings[len(jazz_embeddings):]
 
-        plt.scatter(jazz_reduced[:, 0], jazz_reduced[:, 1], c='blue', label='Jazz')
-        plt.scatter(classical_reduced[:, 0], classical_reduced[:, 1], c='red', label='Classical')
+        kmeans = KMeans(n_clusters=len(embeddings))  # Number of clusters equals the number of classes
+        kmeans.fit(reduced_embeddings)
+
+# Color palette
+        colors = plt.cm.rainbow(np.linspace(0, 1, len(embeddings)))
+
+        start_idx = 0
+        for (label, embedding_list), color in zip(embeddings.items(), colors):
+    # Determine the length of the current class embeddings
+            class_len = len(embedding_list)
+            class_reduced = reduced_embeddings[start_idx:start_idx + class_len]
+            start_idx += class_len
+ 
+            plt.scatter(class_reduced[:, 0], class_reduced[:, 1], c=[color], label=label)
 
         if 'kmeans' in locals():
-             centers = kmeans.cluster_centers_
-             plt.scatter(centers[:, 0], centers[:, 1], c='black', s=100, alpha=0.5)
+            centers = kmeans.cluster_centers_
+            plt.scatter(centers[:, 0], centers[:, 1], c='black', s=100, alpha=0.5)
+ 
         silhouette_avg = silhouette_score(reduced_embeddings, kmeans.labels_)
-
         # Normalizing the score to be between 0 and 100
         plt.legend()
         plt.title("Style Embedding Clusters - Score {}".format(silhouette_avg))
@@ -354,11 +324,11 @@ def generate_embeddings(model, dataloaders, output_dir):
                         x = sample[0].to(get_device())
                         tgt = sample[1].to(get_device())
 
-                        y, style_embedding, positional_embedding = model(x)
+                        y = model(x)
 
                         count += 1
                         file_path = os.path.join(output_dir, dataloader, f"{dataloader}_{count}.pkl")
-
+                        raise ValueError("STOP")
                         with open(file_path, 'wb') as file:
                             pickle.dump([x, style_embedding, positional_embedding, negative_style, label], file)
 

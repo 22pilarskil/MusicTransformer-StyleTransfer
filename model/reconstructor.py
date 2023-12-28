@@ -10,6 +10,68 @@ from .positional_encoding import PositionalEncoding
 from .rpr import TransformerEncoderRPR, TransformerEncoderLayerRPR
 
 
+
+class TransformerDecoderLayerRPR(nn.Module):
+    def __init__(self, d_model, nhead, dim_feedforward=2048, dropout=0.1, er_len=None):
+        super(TransformerDecoderLayerRPR, self).__init__()
+        # Self-attention for the decoder
+        self.self_attn = MultiheadAttentionRPR(d_model, nhead, dropout=dropout, er_len=er_len)
+
+        # Cross-attention layer where queries come from the previous layer, keys and values come from encoder output
+        self.multihead_attn = MultiheadAttentionRPR(d_model, nhead, dropout=dropout, er_len=er_len)
+
+        # Feed forward network
+        self.linear1 = Linear(d_model, dim_feedforward)
+        self.dropout = Dropout(dropout)
+        self.linear2 = Linear(dim_feedforward, d_model)
+
+        # Normalization layers
+        self.norm1 = LayerNorm(d_model)
+        self.norm2 = LayerNorm(d_model)
+        self.norm3 = LayerNorm(d_model)
+
+        # Dropout layers
+        self.dropout1 = Dropout(dropout)
+        self.dropout2 = Dropout(dropout)
+        self.dropout3 = Dropout(dropout)
+
+    def forward(self, tgt, memory, tgt_mask=None, memory_mask=None, tgt_key_padding_mask=None, memory_key_padding_mask=None):
+        # Self-attention
+        tgt2 = self.self_attn(tgt, tgt, tgt, attn_mask=tgt_mask, key_padding_mask=tgt_key_padding_mask)[0]
+        tgt = tgt + self.dropout1(tgt2)
+        tgt = self.norm1(tgt)
+
+        # Cross-attention
+        tgt2 = self.multihead_attn(tgt, memory, memory, attn_mask=memory_mask, key_padding_mask=memory_key_padding_mask)[0]
+        tgt = tgt + self.dropout2(tgt2)
+        tgt = self.norm2(tgt)
+
+        # Feed forward network
+        tgt2 = self.linear2(self.dropout(relu(self.linear1(tgt))))
+        tgt = tgt + self.dropout3(tgt2)
+        tgt = self.norm3(tgt)
+
+        return tgt
+
+class TransformerDecoderRPR(nn.Module):
+    def __init__(self, decoder_layer, num_layers, norm=None):
+        super(TransformerDecoderRPR, self).__init__()
+        self.layers = nn.ModuleList([decoder_layer for _ in range(num_layers)])
+        self.num_layers = num_layers
+        self.norm = norm
+
+    def forward(self, tgt, memory, tgt_mask=None, memory_mask=None, tgt_key_padding_mask=None, memory_key_padding_mask=None):
+        output = tgt
+
+        for layer in self.layers:
+            output = layer(output, memory, tgt_mask=tgt_mask, memory_mask=memory_mask, tgt_key_padding_mask=tgt_key_padding_mask, memory_key_padding_mask=memory_key_padding_mask)
+
+        if self.norm:
+            output = self.norm(output)
+
+        return output
+
+
 # MusicTransformer
 class Reconstructor(nn.Module):
 
@@ -43,9 +105,9 @@ class Reconstructor(nn.Module):
             nn.LayerNorm(d_model)             # Layer normalization
         )
 
-        encoder_norm_main = LayerNorm(self.d_model)
-        encoder_layer_main = TransformerEncoderLayerRPR(self.d_model, self.nhead, self.d_ff, self.dropout, er_len=self.max_seq)
-        encoder_main = TransformerEncoderRPR(encoder_layer_main, self.nlayers, encoder_norm_main)
+        encoder_norm = LayerNorm(self.d_model)
+        encoder_layer = TransformerEncoderLayerRPR(self.d_model, self.nhead, self.d_ff, self.dropout, er_len=self.max_seq)
+        encoder = TransformerEncoderRPR(encoder_layer, self.nlayers, encoder_norm)
 
         self.transformer_main = nn.Transformer(
             d_model=self.d_model, nhead=self.nhead, num_encoder_layers=self.nlayers,

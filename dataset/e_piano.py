@@ -10,8 +10,7 @@ from utilities.device import cpu_device
 
 SEQUENCE_START = 0
 
-
-class EPianoDataset(Dataset):
+class RandomizedBatching(Dataset):
     def __init__(self, root_path, max_seq=2048, random_seq=True):
         self.max_seq = max_seq
         self.class_directories = {d: os.path.join(root_path, d) for d in os.listdir(root_path) if os.path.isdir(os.path.join(root_path, d))}
@@ -35,7 +34,6 @@ class EPianoDataset(Dataset):
         negative_id = list(self.class_files.keys()).index(negative_class)
         positive_sample = self._process_file(positive_file) + [positive_id]
         negative_sample = self._process_file(negative_file) + [negative_id]
-        
         sample = [positive_sample, negative_sample] 
         return sample
 
@@ -57,6 +55,9 @@ class EPianoDataset(Dataset):
         raw_data = torch.tensor(raw_data, dtype=TORCH_LABEL_TYPE, device=cpu_device())
         # Assuming process_midi is a function to process your midi data
         x, tgt = process_midi(raw_data, self.max_seq)
+        crop = random.randint(0, 250)
+        buffer = torch.Tensor([TOKEN_END for i in range(crop)]).int()
+        x, tgt = torch.cat((x[crop:], buffer)), torch.cat((tgt[crop:], buffer))
         return [x, tgt]
 
 
@@ -86,8 +87,8 @@ class TripletSelector(Dataset):
         triplet.append(self._process_file(target_file))
         triplet.append(self._process_file(positive_file))
         triplet.append(self._process_file(negative_file))
-
         triplet.append(positive_class)
+        triplet.append(negative_class)
         return triplet
 
     def _select_file(self, file_list):
@@ -112,54 +113,26 @@ class TripletSelector(Dataset):
 
 
 class EmbeddingsDataset(Dataset):
-    """
-    ----------
-    Author: Damon Gwinn
-    ----------
-    Pytorch Dataset for the Maestro e-piano dataset (https://magenta.tensorflow.org/datasets/maestro).
-    Recommended to use with Dataloader (https://pytorch.org/docs/stable/data.html#torch.utils.data.DataLoader)
-
-    Uses all files found in the given root directory of pre-processed (preprocess_midi.py)
-    Maestro midi files.
-    ----------
-    """
 
     def __init__(self, root):
         self.root       = root
-
+         
         fs = [os.path.join(root, f) for f in os.listdir(self.root)]
         self.data_files = [f for f in fs if os.path.isfile(f)]
+        print("LENGTH", len(self.data_files))
 
-    # __len__
     def __len__(self):
-        """
-        ----------
-        Author: Damon Gwinn
-        ----------
-        How many data files exist in the given directory
-        ----------
-        """
-
         return len(self.data_files)
 
-    # __getitem__
     def __getitem__(self, idx):
-        """
-        ----------
-        Author: Damon Gwinn
-        ----------
-        Gets the indexed midi batch. Gets random sequence or from start depending on random_seq.
 
-        Returns the input and the target.
-        ----------
-        """
-
-        # All data on cpu to allow for the Dataloader to multithread
         i_stream    = open(self.data_files[idx], "rb")
-        # return pickle.load(i_stream), None
         raw_data = pickle.load(i_stream)
         i_stream.close()
+        print(len(raw_data))
         return raw_data
+
+
 
 # process_midi
 def process_midi(raw_mid, max_seq, random_seq=True):
@@ -209,28 +182,6 @@ def process_midi(raw_mid, max_seq, random_seq=True):
     return x, tgt
 
 
-# create_epiano_datasets
-def create_epiano_datasets(dataset_root, max_seq, random_seq=True):
-    """
-    ----------
-    Author: Damon Gwinn
-    ----------
-    Creates train, evaluation, and test EPianoDataset objects for a pre-processed (preprocess_midi.py)
-    root containing train, val, and test folders.
-    ----------
-    """
-
-    train_root = os.path.join(dataset_root, "train")
-    val_root = os.path.join(dataset_root, "val")
-    test_root = os.path.join(dataset_root, "test")
-
-    train_dataset = EPianoDataset(train_root, max_seq, random_seq)
-    val_dataset = EPianoDataset(val_root, max_seq, random_seq)
-    test_dataset = EPianoDataset(test_root, max_seq, random_seq)
-
-    return train_dataset, val_dataset, test_dataset
-
-
 def create_triplet_datasets(dataset_root, max_seq, random_seq=True):
 
     train_root = os.path.join(dataset_root, "train")
@@ -243,7 +194,17 @@ def create_triplet_datasets(dataset_root, max_seq, random_seq=True):
 
     return train_dataset, val_dataset, test_dataset
 
+def create_randomized_batching_datasets(dataset_root, max_seq, random_seq=True):
 
+    train_root = os.path.join(dataset_root, "train")
+    val_root = os.path.join(dataset_root, "val")
+    test_root = os.path.join(dataset_root, "test")
+
+    train_dataset = RandomizedBatching(train_root, max_seq, random_seq)
+    val_dataset = RandomizedBatching(val_root, max_seq, random_seq)
+    test_dataset = RandomizedBatching(test_root, max_seq, random_seq)
+
+    return train_dataset, val_dataset, test_dataset
 
 
 def create_embedding_datasets(dataset_root):
