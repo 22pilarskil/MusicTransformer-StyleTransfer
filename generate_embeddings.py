@@ -7,7 +7,7 @@ from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
 from torch.optim import Adam
 
-from dataset.e_piano import create_epiano_datasets, compute_epiano_accuracy
+from dataset.e_piano import create_embedding_datasets, compute_epiano_accuracy
 
 from model.music_transformer import MusicTransformer
 from model.loss import SmoothCrossEntropyLoss
@@ -34,7 +34,7 @@ def main():
     print_train_args(args)
 
     ##### Datasets #####
-    train_dataset, val_dataset, test_dataset = create_epiano_datasets(args.input_dir, args.max_sequence)
+    train_dataset, val_dataset, test_dataset = create_embedding_datasets(args.input_dir)
 
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, num_workers=args.n_workers, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size, num_workers=args.n_workers)

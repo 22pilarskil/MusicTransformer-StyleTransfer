@@ -7,7 +7,7 @@ from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
 from torch.optim import Adam
 
-from dataset.e_piano import create_triplet_datasets, create_epiano_datasets, compute_epiano_accuracy
+from dataset.e_piano import create_triplet_datasets, create_randomized_batching_datasets, compute_epiano_accuracy
 
 from model.music_transformer import MusicTransformer
 from model.loss import SmoothCrossEntropyLoss
@@ -20,7 +20,7 @@ from utilities.run_model import train_epoch, eval_model
 
 CSV_HEADER = ["Epoch", "Learn rate", "Avg Train loss", "Train Accuracy", "Train TL", "Avg Eval loss", "Eval accuracy", "Eval TL"]
 
-start = 0
+start = 1
 # Baseline is an untrained epoch that we evaluate as a baseline loss and accuracy
 BASELINE_EPOCH = -1
 # main
@@ -68,7 +68,12 @@ def main():
         tensorboard_summary = SummaryWriter(log_dir=tensorboad_dir)
 
     ##### Datasets #####
-    train_dataset, _, _ = create_epiano_datasets(args.input_dir, args.max_sequence)
+    if args.feature_size:
+        train_dataset, _, _ = create_randomized_batching_datasets(args.input_dir, args.max_sequence)
+    else:
+        train_dataset, _, _ = create_triplet_datasets(args.input_dir, args.max_sequence)
+        print(train_dataset)
+
     eval_train_dataset, eval_test_dataset, _ = create_triplet_datasets(args.input_dir, args.max_sequence)
 
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, num_workers=args.n_workers, shuffle=True)
@@ -76,7 +81,7 @@ def main():
     eval_test_loader = DataLoader(eval_test_dataset, batch_size=args.batch_size, num_workers=args.n_workers)
     model = MusicTransformer(n_layers=args.n_layers, num_heads=args.num_heads,
                 feature_size=args.feature_size, d_model=args.d_model, dim_feedforward=args.dim_feedforward, dropout=args.dropout,
-                max_sequence=args.max_sequence, rpr=args.rpr).to(get_device())
+                transition_features=args.transition_features, reduction_factor=args.reduction_factor, max_sequence=args.max_sequence, rpr=args.rpr).to(get_device())
     
     def check_grads(model):
         def hook_fn(grad):

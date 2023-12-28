@@ -37,7 +37,8 @@ def parse_train_args():
     parser.add_argument("-num_heads", type=int, default=8, help="Number of heads to use for multi-head attention")
     parser.add_argument("-d_model", type=int, default=512, help="Dimension of the model (output dim of embedding layers, etc.)")
     parser.add_argument("-feature_size", type=int, default=0, help="Dimension of embedding size, 0 means regular generation")
-
+    parser.add_argument("-reduction_factor", type=int, default=4, help="Dimensions to reduce transformer output to")
+    parser.add_argument("-transition_features", type=int, default=64, help="Number of transition features to learn")
     parser.add_argument("-dim_feedforward", type=int, default=1024, help="Dimension of the feedforward layer")
 
     parser.add_argument("-dropout", type=float, default=0.1, help="Dropout rate")

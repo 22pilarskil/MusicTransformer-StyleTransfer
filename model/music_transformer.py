@@ -30,7 +30,7 @@ class MusicTransformer(nn.Module):
     """
 
     def __init__(self, n_layers=6, num_heads=8, d_model=512, dim_feedforward=1024,
-                 dropout=0.1, max_sequence=2048, rpr=False, style_layer=5, feature_size=0):
+                 dropout=0.1, max_sequence=1000, rpr=False, style_layer=5, feature_size=0, reduction_factor=4, transition_features=64):
         super(MusicTransformer, self).__init__()
 
         self.dummy      = DummyDecoder()
@@ -44,8 +44,8 @@ class MusicTransformer(nn.Module):
         self.rpr        = rpr
         self.style_layer = style_layer
         self.feature_size = feature_size
-        self.reduction_factor = 4
-        self.transition_features = 64
+        self.reduction_factor = reduction_factor
+        self.transition_features = transition_features
 
         # Input embedding
         self.embedding = nn.Embedding(VOCAB_SIZE, self.d_model)
@@ -72,16 +72,15 @@ class MusicTransformer(nn.Module):
             dim_feedforward=self.d_ff, custom_decoder=self.dummy, custom_encoder=encoder_main
         )
 
-
+        self.flatten = nn.Flatten()
+        self.linear = nn.Linear(in_features=512, out_features=self.reduction_factor)
+        self.conv1d = nn.Conv1d(in_channels=self.reduction_factor, out_channels=self.transition_features, kernel_size=3, stride=1, padding=1)
+        
         if self.feature_size:
-            self.flatten = nn.Flatten()
-            self.linear = nn.Linear(in_features=512, out_features=self.reduction_factor)
-            self.conv1d = nn.Conv1d(in_channels=self.reduction_factor, out_channels=self.transition_features, kernel_size=3, stride=1, padding=1)
             self.Wout = nn.Linear(in_features=self.transition_features * self.max_seq, out_features=self.feature_size)
         else:
-            self.Wout       = nn.Linear(self.d_model, VOCAB_SIZE)
+            self.Wout = nn.Linear(in_features=self.transition_features * self.max_seq, out_features=VOCAB_SIZE)
 
-    
 
     # forward
     def forward(self, x, mask=True):
@@ -113,23 +112,22 @@ class MusicTransformer(nn.Module):
         style_embedding = self.transformer_style(src=positional_embedding, tgt=positional_embedding, src_mask=mask_style)
 
         x_out = self.transformer_main(src=style_embedding, tgt=style_embedding, src_mask=mask_main)
-        print(x_out.shape)
         x_out = x_out.permute(1,0,2)
-        # Back to (batch_size, max_seq, d_model)
-        if (self.feature_size):
-            x = self.linear(x_out)
-            x = nn.ReLU()(x)
-            x = x.permute(0, 2, 1)
-            x = self.conv1d(x)
-            x = nn.ReLU()(x)
-            x = self.flatten(x)
-            x = nn.ReLU()(x)
-            y = self.Wout(x)
-        else: 
-            y = self.Wout(x_out)
+
+        x = self.linear(x_out)
+        x = nn.ReLU()(x)
+        x = x.permute(0, 2, 1)
+        x = self.conv1d(x)
+        x = nn.ReLU()(x)
+        x = self.flatten(x)
+        x = nn.ReLU()(x)
+
+        y = self.Wout(x)
+        if not self.feature_size:
+            y = y + 1e-5
         del mask
         # They are trained to predict the next note in sequence (we don't need the last one)
-        return y, style_embedding, positional_embedding
+        return y
 
     # generate
     def generate(self, primer=None, target_seq_length=1024, beam=0, beam_chance=1.0):

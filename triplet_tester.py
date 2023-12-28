@@ -6,6 +6,7 @@ import torch.nn as nn
 from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
 from torch.optim import Adam
+import matplotlib.pyplot as plt
 
 from dataset.e_piano import create_triplet_datasets, compute_epiano_accuracy
 
