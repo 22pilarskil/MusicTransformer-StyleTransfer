@@ -109,10 +109,10 @@ class Reconstructor(nn.Module):
         encoder_layer = TransformerEncoderLayerRPR(self.d_model, self.nhead, self.d_ff, self.dropout, er_len=self.max_seq)
         encoder = TransformerEncoderRPR(encoder_layer, self.nlayers, encoder_norm)
 
-        self.transformer_main = nn.Transformer(
+        self.transformer = nn.Transformer(
             d_model=self.d_model, nhead=self.nhead, num_encoder_layers=self.nlayers,
             num_decoder_layers=0, dropout=self.dropout, # activation=self.ff_activ,
-            dim_feedforward=self.d_ff, custom_decoder=self.dummy, custom_encoder=encoder_main
+            dim_feedforward=self.d_ff, custom_decoder=self.dummy, custom_encoder=encoder
         )
 
         # Final output is a softmaxed linear layer

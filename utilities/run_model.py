@@ -94,9 +94,8 @@ def train_epoch(cur_epoch, model, dataloader, loss, opt, lr_scheduler=None, prin
                 x = sample[0].to(get_device())
                 tgt = sample[1].to(get_device())
 
-                with autocast():
+                if True:
                     y = model(x)
-                    raise ValueError("StOP")
                     labels.append(label)
                     style_embeddings.append(y.to('cpu'))
             style_embeddings = [j.reshape(1, feature_size) for i in style_embeddings for j in i]
