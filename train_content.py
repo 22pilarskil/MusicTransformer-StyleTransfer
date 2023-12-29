@@ -16,13 +16,16 @@ from utilities.constants import *
 from utilities.device import get_device, use_cuda
 from utilities.lr_scheduling import LrStepTracker, get_lr
 from utilities.argument_funcs import parse_train_args, print_train_args, write_model_params
-from utilities.run_model import train_epoch, eval_model
+from utilities.run_model import train_epoch_content, eval_model_content
 
-CSV_HEADER = ["Epoch", "Learn rate", "Avg Train loss", "Train Accuracy", "Train TL", "Avg Eval loss", "Eval accuracy", "Eval TL"]
+CSV_HEADER = ["Epoch", "Learn rate", "Avg Train loss", "Train Accuracy", "Train TL", "Avg Eval loss", "Eval accuracy",
+              "Eval TL"]
 
 start = 1
 # Baseline is an untrained epoch that we evaluate as a baseline loss and accuracy
 BASELINE_EPOCH = -1
+
+
 # main
 def main():
     """
@@ -36,7 +39,7 @@ def main():
     args = parse_train_args()
     print_train_args(args)
 
-    if(args.force_cpu):
+    if (args.force_cpu):
         use_cuda(False)
         print("WARNING: Forced CPU usage, expect model to perform slower")
         print("")
@@ -59,7 +62,7 @@ def main():
     best_text = os.path.join(results_folder, "best_epochs.txt")
 
     ##### Tensorboard #####
-    if(args.no_tensorboard):
+    if (args.no_tensorboard):
         tensorboard_summary = None
     else:
         from torch.utils.tensorboard import SummaryWriter
@@ -80,9 +83,11 @@ def main():
     eval_train_loader = DataLoader(eval_train_dataset, batch_size=args.batch_size, num_workers=args.n_workers)
     eval_test_loader = DataLoader(eval_test_dataset, batch_size=args.batch_size, num_workers=args.n_workers)
     model = MusicTransformer(n_layers=args.n_layers, num_heads=args.num_heads,
-                feature_size=args.feature_size, d_model=args.d_model, dim_feedforward=args.dim_feedforward, dropout=args.dropout,
-                transition_features=args.transition_features, reduction_factor=args.reduction_factor, max_sequence=args.max_sequence, rpr=args.rpr).to(get_device())
-    
+                             feature_size=args.feature_size, d_model=args.d_model, dim_feedforward=args.dim_feedforward,
+                             dropout=args.dropout,
+                             transition_features=args.transition_features, reduction_factor=args.reduction_factor,
+                             max_sequence=args.max_sequence, rpr=args.rpr).to(get_device())
+
     def check_grads(model):
         def hook_fn(grad):
             if torch.isnan(grad).any():
@@ -93,23 +98,23 @@ def main():
                 param.register_hook(hook_fn)
 
     check_grads(model)
- 
+
     ##### Continuing from previous training session #####
     start_epoch = start + BASELINE_EPOCH
-    if(args.continue_weights is not None):
-        if(args.continue_epoch is None):
+    if (args.continue_weights is not None):
+        if (args.continue_epoch is None):
             print("ERROR: Need epoch number to continue from (-continue_epoch) when using continue_weights")
             return
         else:
             model.load_state_dict(torch.load(args.continue_weights))
             start_epoch = args.continue_epoch
-    elif(args.continue_epoch is not None):
+    elif (args.continue_epoch is not None):
         print("ERROR: Need continue weights (-continue_weights) when using continue_epoch")
         return
 
     ##### Lr Scheduler vs static lr #####
-    if(args.lr is None):
-        if(args.continue_epoch is None):
+    if (args.lr is None):
+        if (args.continue_epoch is None):
             init_step = 0
         else:
             init_step = args.continue_epoch * len(train_loader)
@@ -123,7 +128,7 @@ def main():
     eval_loss_func = nn.CrossEntropyLoss(ignore_index=TOKEN_PAD)
 
     ##### SmoothCrossEntropyLoss or CrossEntropyLoss for training #####
-    if(args.ce_smoothing is None):
+    if (args.ce_smoothing is None):
         train_loss_func = eval_loss_func
     else:
         train_loss_func = SmoothCrossEntropyLoss(args.ce_smoothing, VOCAB_SIZE, ignore_index=TOKEN_PAD)
@@ -131,35 +136,35 @@ def main():
     ##### Optimizer #####
     opt = Adam(model.parameters(), lr=lr, betas=(ADAM_BETA_1, ADAM_BETA_2), eps=ADAM_EPSILON)
 
-    if(args.lr is None):
+    if (args.lr is None):
         lr_scheduler = LambdaLR(opt, lr_stepper.step)
     else:
         lr_scheduler = None
 
     ##### Tracking best evaluation accuracy #####
-    best_eval_acc        = 0.0
-    best_eval_acc_epoch  = -1
-    best_eval_loss       = float("inf")
+    best_eval_acc = 0.0
+    best_eval_acc_epoch = -1
+    best_eval_loss = float("inf")
     best_eval_loss_epoch = -1
 
     ##### Results reporting #####
-    if(not os.path.isfile(results_file)):
+    if (not os.path.isfile(results_file)):
         with open(results_file, "w", newline="") as o_stream:
             writer = csv.writer(o_stream)
             writer.writerow(CSV_HEADER)
 
-
     ##### TRAIN LOOP #####
     for epoch in range(start_epoch, args.epochs):
         # Baseline has no training and acts as a base loss and accuracy (epoch 0 in a sense)
-        if(epoch > BASELINE_EPOCH):
+        if (epoch > BASELINE_EPOCH):
             print(SEPERATOR)
-            print("NEW EPOCH:", epoch+1)
+            print("NEW EPOCH:", epoch + 1)
             print(SEPERATOR)
             print("")
 
             # Train
-            train_epoch(epoch+1, model, train_loader, train_loss_func, opt, lr_scheduler, args.print_modulus, args.feature_size)
+            train_epoch_content(epoch + 1, model, train_loader, train_loss_func, opt, lr_scheduler, args.print_modulus,
+                              args.feature_size)
 
             print(SEPERATOR)
             print("Evaluating:")
@@ -168,13 +173,15 @@ def main():
             print("Baseline model evaluation (Epoch 0):")
 
         # Eval
-        train_loss, train_acc, train_triplet_loss = eval_model(model, eval_train_loader, train_loss_func, args.feature_size)
-        eval_loss, eval_acc, eval_triplet_loss = eval_model(model, eval_test_loader, eval_loss_func, args.feature_size)
+        train_loss, train_acc, train_triplet_loss = eval_model_content(model, eval_train_loader, train_loss_func,
+                                                                     args.feature_size)
+        eval_loss, eval_acc, eval_triplet_loss = eval_model_content(model, eval_test_loader, eval_loss_func,
+                                                                  args.feature_size)
 
         # Learn rate
         lr = get_lr(opt)
 
-        print("Epoch:", epoch+1)
+        print("Epoch:", epoch + 1)
         print("Avg train loss:", train_loss)
         print("Avg train acc:", train_acc)
         print("Avg train tl:", train_triplet_loss)
@@ -186,20 +193,20 @@ def main():
 
         new_best = False
 
-        if(eval_acc > best_eval_acc):
+        if (eval_acc > best_eval_acc):
             best_eval_acc = eval_acc
-            best_eval_acc_epoch  = epoch+1
+            best_eval_acc_epoch = epoch + 1
             torch.save(model.state_dict(), best_acc_file)
             new_best = True
 
-        if(eval_loss < best_eval_loss):
-            best_eval_loss       = eval_loss
-            best_eval_loss_epoch = epoch+1
+        if (eval_loss < best_eval_loss):
+            best_eval_loss = eval_loss
+            best_eval_loss_epoch = epoch + 1
             torch.save(model.state_dict(), best_loss_file)
             new_best = True
 
         # Writing out new bests
-        if(new_best):
+        if (new_best):
             with open(best_text, "w") as o_stream:
                 print("Best eval acc epoch:", best_eval_acc_epoch, file=o_stream)
                 print("Best eval acc:", best_eval_acc, file=o_stream)
@@ -207,26 +214,26 @@ def main():
                 print("Best eval loss epoch:", best_eval_loss_epoch, file=o_stream)
                 print("Best eval loss:", best_eval_loss, file=o_stream)
 
-
-        if(not args.no_tensorboard):
-            tensorboard_summary.add_scalar("Avg_CE_loss/train", train_loss, global_step=epoch+1)
-            tensorboard_summary.add_scalar("Avg_CE_loss/eval", eval_loss, global_step=epoch+1)
-            tensorboard_summary.add_scalar("Accuracy/train", train_acc, global_step=epoch+1)
-            tensorboard_summary.add_scalar("Accuracy/eval", eval_acc, global_step=epoch+1)
-            tensorboard_summary.add_scalar("Learn_rate/train", lr, global_step=epoch+1)
+        if (not args.no_tensorboard):
+            tensorboard_summary.add_scalar("Avg_CE_loss/train", train_loss, global_step=epoch + 1)
+            tensorboard_summary.add_scalar("Avg_CE_loss/eval", eval_loss, global_step=epoch + 1)
+            tensorboard_summary.add_scalar("Accuracy/train", train_acc, global_step=epoch + 1)
+            tensorboard_summary.add_scalar("Accuracy/eval", eval_acc, global_step=epoch + 1)
+            tensorboard_summary.add_scalar("Learn_rate/train", lr, global_step=epoch + 1)
             tensorboard_summary.flush()
 
-        if((epoch+1) % args.weight_modulus == 0):
-            epoch_str = str(epoch+1).zfill(PREPEND_ZEROS_WIDTH)
+        if ((epoch + 1) % args.weight_modulus == 0):
+            epoch_str = str(epoch + 1).zfill(PREPEND_ZEROS_WIDTH)
             path = os.path.join(weights_folder, "epoch_" + epoch_str + ".pickle")
             torch.save(model.state_dict(), path)
 
         with open(results_file, "a", newline="") as o_stream:
             writer = csv.writer(o_stream)
-            writer.writerow([epoch+1, lr, train_loss, train_acc, train_triplet_loss, eval_loss, eval_acc, eval_triplet_loss])
+            writer.writerow(
+                [epoch + 1, lr, train_loss, train_acc, train_triplet_loss, eval_loss, eval_acc, eval_triplet_loss])
 
     # Sanity check just to make sure everything is gone
-    if(not args.no_tensorboard):
+    if (not args.no_tensorboard):
         tensorboard_summary.flush()
 
     return

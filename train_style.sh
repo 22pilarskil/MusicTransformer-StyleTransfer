@@ -1,6 +1,6 @@
 
 #TRAIN SCRIPT
-python3 train.py \
+python3 train_style.py \
 -lr 0.0001 \
 -feature_size 128 \
 -input_dir ../dataset_3_genres_1000 \

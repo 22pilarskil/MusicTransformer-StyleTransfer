@@ -115,8 +115,8 @@ class TripletSelector(Dataset):
 class EmbeddingsDataset(Dataset):
 
     def __init__(self, root):
-        self.root       = root
-         
+        self.root = root
+
         fs = [os.path.join(root, f) for f in os.listdir(self.root)]
         self.data_files = [f for f in fs if os.path.isfile(f)]
         print("LENGTH", len(self.data_files))
@@ -125,13 +125,14 @@ class EmbeddingsDataset(Dataset):
         return len(self.data_files)
 
     def __getitem__(self, idx):
-
-        i_stream    = open(self.data_files[idx], "rb")
+        print("OPENING")
+        i_stream = open(self.data_files[idx], "rb")
         raw_data = pickle.load(i_stream)
+        raw_data[0] = torch.Tensor(raw_data[0]).int()
+        raw_data[1] = torch.Tensor(raw_data[1]).int()
+        raw_data[2] = torch.Tensor(raw_data[2]).int()
         i_stream.close()
-        print(len(raw_data))
         return raw_data
-
 
 
 # process_midi

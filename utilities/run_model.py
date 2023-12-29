@@ -1,11 +1,9 @@
-import torch
 import time
 import gc
 import os
 import shutil
 import pickle
 
-from sklearn.decomposition import PCA
 from sklearn.metrics import silhouette_score
 from sklearn.manifold import TSNE
 from sklearn.cluster import KMeans
@@ -16,65 +14,21 @@ from .constants import *
 from utilities.device import get_device
 from .lr_scheduling import get_lr
 
-from dataset.e_piano import compute_epiano_accuracy
-
 from torch.cuda.amp import GradScaler, autocast
-import torch.nn.functional as F
+
+from .tools import compute_triplet_distances
+
 scaler = GradScaler()
 
-MARGIN = 1.0
-triplet_loss_fn = torch.nn.TripletMarginLoss(margin=MARGIN, p=2)
+TRIPLET_MARGIN = 1.0
+triplet_loss_fn = torch.nn.TripletMarginLoss(margin=TRIPLET_MARGIN, p=2)
+CONTRASTIVE_MARGIN = 1.0
+contrastive_loss_fn = torch.nn.MarginRankingLoss(margin=CONTRASTIVE_MARGIN)
 torch.autograd.set_detect_anomaly(True)
 
-
-
-def create_triplet_mask(labels):
-    labels = labels.unsqueeze(1)  # Shape: (batch_size, 1)
-    mask_anchor_positive = labels == labels.T  # Anchor and Positive of
-    mask_anchor_negative = labels != labels.T  # Anchor and Negative of
-
-    valid_triplets = mask_anchor_positive.unsqueeze(2) & mask_anchor_negative.unsqueeze(1)
-    valid_triplet_indices = valid_triplets.nonzero(as_tuple=False)
-    valid_triplet_indices = valid_triplet_indices[valid_triplet_indices[:, 0] != valid_triplet_indices[:, 1]]
-    return valid_triplet_indices
-
-
-def compute_triplet_distances(embeddings, labels, margin, return_all=False):
-    triplet_indices = create_triplet_mask(labels)
-    anchor_embeddings = embeddings[triplet_indices[:, 0]]
-    positive_embeddings = embeddings[triplet_indices[:, 1]]
-    negative_embeddings = embeddings[triplet_indices[:, 2]]
-
-    pos_dist = torch.nn.functional.pairwise_distance(anchor_embeddings, positive_embeddings, p=2)
-    neg_dist = torch.nn.functional.pairwise_distance(anchor_embeddings, negative_embeddings, p=2)
-
-    semi_hard_triplet_mask = (neg_dist > pos_dist) & (neg_dist < pos_dist + margin)
-    hard_triplet_mask = (pos_dist - neg_dist + margin > 0)
-
-    zero_loss_triplets = ~(semi_hard_triplet_mask | (pos_dist - neg_dist + margin > 0))
-    zero_loss_count = zero_loss_triplets.sum().item()
-    print("Zero Loss Triplets:", zero_loss_count)
-
-    if return_all:
-        combined_mask = semi_hard_triplet_mask | hard_triplet_mask
-        valid_indices = triplet_indices[combined_mask]
-    else:
-        valid_indices = triplet_indices[semi_hard_triplet_mask] if semi_hard_triplet_mask.any() else triplet_indices[hard_triplet_mask]
-
-    print(f"Computing {len(valid_indices)} / {len(triplet_indices)}")
-    return valid_indices
-
 # train_epoch
-def train_epoch(cur_epoch, model, dataloader, loss, opt, lr_scheduler=None, print_modulus=1, feature_size=0):
-    """
-    ----------
-    Author: Damon Gwinn
-    ----------
-    Trains a single model epoch
-    ----------
-    """
+def train_epoch_style(cur_epoch, model, dataloader, loss, opt, lr_scheduler=None, print_modulus=1, feature_size=0):
 
-    out = -1
     model.train()
     batch_num = 0
     skipped = 0
@@ -96,14 +50,14 @@ def train_epoch(cur_epoch, model, dataloader, loss, opt, lr_scheduler=None, prin
 
                 with autocast():
                     y = model(x)
-                    raise ValueError("StOP")
                     labels.append(label)
                     style_embeddings.append(y.to('cpu'))
+
             style_embeddings = [j.reshape(1, feature_size) for i in style_embeddings for j in i]
             labels = [j for i in labels for j in i]
             embeddings = torch.cat(style_embeddings, dim=0)
             labels = torch.tensor(labels)
-            top_hard_triplets = compute_triplet_distances(embeddings, labels, MARGIN)
+            top_hard_triplets = compute_triplet_distances(embeddings, labels, TRIPLET_MARGIN)
 
             top_anchor_embeddings = embeddings[top_hard_triplets[:, 0]]
             top_positive_embeddings = embeddings[top_hard_triplets[:, 1]]
@@ -148,8 +102,83 @@ def train_epoch(cur_epoch, model, dataloader, loss, opt, lr_scheduler=None, prin
 
     return
 
-# eval_model
-def eval_model(model, dataloader, loss, feature_size=0):
+
+def train_epoch_content(cur_epoch, model, dataloader, loss, opt, lr_scheduler=None, print_modulus=1, feature_size=0):
+
+    model.train()
+    batch_num = 0
+    skipped = 0
+    dataloader_iter = iter(dataloader)
+    while True:
+        try:
+            batch = next(dataloader_iter)
+            time_before = time.time()
+
+            opt.zero_grad()
+            gc.collect()
+            total_loss = 0
+            for num, sample in enumerate(batch):
+                melody = sample[0].to(get_device())
+                harmony = sample[1].to(get_device())
+                combined = sample[1].to(get_device())
+
+                with autocast():
+                    y_melody = model(melody).to('cpu')
+                    y_harmony = model(harmony).to('cpu')
+                    y_combined = model(combined).to('cpu')
+
+            distance_melody_combined = torch.nn.functional.pairwise_distance(y_melody, y_combined)
+            distance_harmony_combined = torch.nn.functional.pairwise_distance(y_harmony, y_combined)
+            distance_melody_harmony = torch.nn.functional.pairwise_distance(y_melody, y_harmony)
+            shape = torch.zeros_like(distance_melody_combined)
+            similarity_labels = torch.full((shape.shape[0],), 1)
+            difference_labels = torch.full((shape.shape[0],), -1)
+
+            loss_melody_combined = contrastive_loss_fn(distance_melody_combined, shape, similarity_labels)
+            loss_harmony_combined = contrastive_loss_fn(distance_harmony_combined, shape, similarity_labels)
+            loss_melody_harmony = contrastive_loss_fn(distance_melody_harmony, shape, difference_labels)
+
+            combined_loss = (loss_melody_combined + loss_harmony_combined + loss_melody_harmony).to("cuda:0")
+
+            scaler.scale(combined_loss).backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
+            scaler.step(opt)
+            scaler.update()
+
+            if(lr_scheduler is not None):
+                lr_scheduler.step()
+
+            time_after = time.time()
+            time_took = time_after - time_before
+
+            if((batch_num+1) % print_modulus == 0):
+                print(SEPERATOR)
+                print("Epoch", cur_epoch, " Batch", batch_num+1, "/", len(dataloader))
+                print("LR:", get_lr(opt))
+                print("Train loss:", float(total_loss))
+                print("")
+                print("Combined loss:", float(combined_loss))
+                print("SKIPPED: ", skipped)
+                print("Time (s):", time_took)
+                print(SEPERATOR)
+                print("")
+
+            del combined_loss
+            del loss_melody_combined
+            del loss_harmony_combined
+            del loss_melody_harmony
+            batch_num += 1
+
+            torch.cuda.empty_cache()
+
+        except StopIteration:
+            print(f"EPOCH {cur_epoch} finished!")
+            break  # End of the dataset
+
+    return
+
+
+def eval_model_style(model, dataloader, loss, feature_size=0):
     """
     ----------
     Author: Damon Gwinn
@@ -159,14 +188,68 @@ def eval_model(model, dataloader, loss, feature_size=0):
     """
 
     model.eval()
-
-    avg_acc     = -1
-    avg_loss    = -1
     batch_num = 0
     with torch.set_grad_enabled(False):
         n_test      = len(dataloader)
         sum_loss   = []
         sum_acc    = 0.0
+        sum_combined_loss = 0.0
+        dataloader_iter = iter(dataloader)
+        while True:
+            try:
+                batch = next(dataloader_iter)
+
+                for num, sample in enumerate(batch):
+                    melody = sample[0].to(get_device())
+                    harmony = sample[1].to(get_device())
+                    combined = sample[1].to(get_device())
+
+                    with autocast():
+                        y_melody = model(melody).to('cpu')
+                        y_harmony = model(harmony).to('cpu')
+                        y_combined = model(combined).to('cpu')
+
+                distance_melody_combined = torch.nn.functional.pairwise_distance(y_melody, y_combined)
+                distance_harmony_combined = torch.nn.functional.pairwise_distance(y_harmony, y_combined)
+                distance_melody_harmony = torch.nn.functional.pairwise_distance(y_melody, y_harmony)
+                shape = torch.zeros_like(distance_melody_combined)
+                similarity_labels = torch.full((shape.shape[0],), 1)
+                difference_labels = torch.full((shape.shape[0],), -1)
+
+                loss_melody_combined = contrastive_loss_fn(distance_melody_combined, shape, similarity_labels)
+                loss_harmony_combined = contrastive_loss_fn(distance_harmony_combined, shape, similarity_labels)
+                loss_melody_harmony = contrastive_loss_fn(distance_melody_harmony, shape, difference_labels)
+
+                sum_combined_loss += float(loss_melody_combined + loss_harmony_combined + loss_melody_harmony)
+
+                batch_num += 1
+
+            except StopIteration:
+                break  # End of the dataset
+        sum_loss = np.array(sum_loss)
+        nan_count = np.sum(np.isnan(sum_loss))
+        avg_loss = np.nansum(sum_loss) / ((n_test * 3) - nan_count)
+        avg_acc     = sum_acc / n_test
+        avg_triplet_loss = sum_combined_loss / n_test
+
+    return avg_loss, avg_acc, avg_triplet_loss
+
+
+def eval_model_content(model, dataloader, loss, feature_size=0):
+    """
+    ----------
+    Author: Damon Gwinn
+    ----------
+    Evaluates the model and prints the average loss and accuracy
+    ----------
+    """
+
+    model.eval()
+    batch_num = 0
+    with torch.set_grad_enabled(False):
+        n_test = len(dataloader)
+        sum_loss = []
+        sum_acc = 0.0
         sum_triplet_loss = 0.0
         dataloader_iter = iter(dataloader)
         while True:
@@ -177,8 +260,8 @@ def eval_model(model, dataloader, loss, feature_size=0):
                 for num, sample in enumerate(batch[:3]):
                     x = sample[0].to(get_device())
                     tgt = sample[1].to(get_device())
-             
-                    if True: #with autocast():
+
+                    with autocast():
                         y = model(x)
                         style_embeddings.append(y)
 
@@ -192,7 +275,7 @@ def eval_model(model, dataloader, loss, feature_size=0):
         sum_loss = np.array(sum_loss)
         nan_count = np.sum(np.isnan(sum_loss))
         avg_loss = np.nansum(sum_loss) / ((n_test * 3) - nan_count)
-        avg_acc     = sum_acc / n_test
+        avg_acc = sum_acc / n_test
         avg_triplet_loss = sum_triplet_loss / n_test
 
     return avg_loss, avg_acc, avg_triplet_loss
@@ -264,12 +347,10 @@ def eval_triplets(model, dataloader, iterations=40):
         kmeans = KMeans(n_clusters=len(embeddings))  # Number of clusters equals the number of classes
         kmeans.fit(reduced_embeddings)
 
-# Color palette
         colors = plt.cm.rainbow(np.linspace(0, 1, len(embeddings)))
 
         start_idx = 0
         for (label, embedding_list), color in zip(embeddings.items(), colors):
-    # Determine the length of the current class embeddings
             class_len = len(embedding_list)
             class_reduced = reduced_embeddings[start_idx:start_idx + class_len]
             start_idx += class_len
@@ -285,10 +366,7 @@ def eval_triplets(model, dataloader, iterations=40):
         plt.legend()
         plt.title("Style Embedding Clusters - Score {}".format(silhouette_avg))
         plt.savefig('style_embedding_clusters.png')
-
-
-
-    return
+        return 0, 0, silhouette_avg
 
 
 
@@ -316,8 +394,6 @@ def generate_embeddings(model, dataloaders, output_dir):
             while True:
                 try:
                     batch = next(dataloader_iter)
-                    num_samples = len(batch)
-                    _, negative_style, _ = model(batch[2][0].to(get_device()))
                     label = "classical" if "classical_pos" in batch[3] else "jazz"
                     for num, sample in enumerate(batch[:2]):
 
@@ -328,9 +404,8 @@ def generate_embeddings(model, dataloaders, output_dir):
 
                         count += 1
                         file_path = os.path.join(output_dir, dataloader, f"{dataloader}_{count}.pkl")
-                        raise ValueError("STOP")
                         with open(file_path, 'wb') as file:
-                            pickle.dump([x, style_embedding, positional_embedding, negative_style, label], file)
+                            pickle.dump([x, y, label], file)
 
                         print(f"File saved to {file_path} with label {label}")
                        

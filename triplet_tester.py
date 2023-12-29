@@ -17,7 +17,7 @@ from utilities.constants import *
 from utilities.device import get_device, use_cuda
 from utilities.lr_scheduling import LrStepTracker, get_lr
 from utilities.argument_funcs import parse_train_args, print_train_args, write_model_params
-from utilities.run_model import train_epoch, eval_model, eval_triplets
+from utilities.run_model import train_epoch_style, eval_model_style, eval_triplets
 
 
 

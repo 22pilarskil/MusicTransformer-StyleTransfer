@@ -9,7 +9,7 @@ from model.music_transformer import MusicTransformer
 from utilities.constants import *
 from utilities.device import get_device, use_cuda
 from utilities.argument_funcs import parse_eval_args, print_eval_args
-from utilities.run_model import eval_model
+from utilities.run_model import eval_model_style
 
 # main
 def main():
@@ -46,7 +46,7 @@ def main():
     print("Evaluating:")
     model.eval()
 
-    avg_loss, avg_acc = eval_model(model, test_loader, loss)
+    avg_loss, avg_acc = eval_model_style(model, test_loader, loss)
 
     print("Avg loss:", avg_loss)
     print("Avg acc:", avg_acc)
