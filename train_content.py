@@ -7,7 +7,7 @@ from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
 from torch.optim import Adam
 
-from dataset.e_piano import create_triplet_datasets, create_randomized_batching_datasets, compute_epiano_accuracy
+from dataset.e_piano import create_embedding_datasets
 
 from model.music_transformer import MusicTransformer
 from model.loss import SmoothCrossEntropyLoss
@@ -21,7 +21,7 @@ from utilities.run_model import train_epoch_content, eval_model_content
 CSV_HEADER = ["Epoch", "Learn rate", "Avg Train loss", "Train Accuracy", "Train TL", "Avg Eval loss", "Eval accuracy",
               "Eval TL"]
 
-start = 1
+start = 0
 # Baseline is an untrained epoch that we evaluate as a baseline loss and accuracy
 BASELINE_EPOCH = -1
 
@@ -71,17 +71,10 @@ def main():
         tensorboard_summary = SummaryWriter(log_dir=tensorboad_dir)
 
     ##### Datasets #####
-    if args.feature_size:
-        train_dataset, _, _ = create_randomized_batching_datasets(args.input_dir, args.max_sequence)
-    else:
-        train_dataset, _, _ = create_triplet_datasets(args.input_dir, args.max_sequence)
-        print(train_dataset)
-
-    eval_train_dataset, eval_test_dataset, _ = create_triplet_datasets(args.input_dir, args.max_sequence)
+    train_dataset, test_dataset, val_dataset = create_embedding_datasets(args.input_dir, args.max_sequence)
 
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, num_workers=args.n_workers, shuffle=True)
-    eval_train_loader = DataLoader(eval_train_dataset, batch_size=args.batch_size, num_workers=args.n_workers)
-    eval_test_loader = DataLoader(eval_test_dataset, batch_size=args.batch_size, num_workers=args.n_workers)
+    test_loader = DataLoader(test_dataset, batch_size=args.batch_size, num_workers=args.n_workers)
     model = MusicTransformer(n_layers=args.n_layers, num_heads=args.num_heads,
                              feature_size=args.feature_size, d_model=args.d_model, dim_feedforward=args.dim_feedforward,
                              dropout=args.dropout,
@@ -173,9 +166,9 @@ def main():
             print("Baseline model evaluation (Epoch 0):")
 
         # Eval
-        train_loss, train_acc, train_triplet_loss = eval_model_content(model, eval_train_loader, train_loss_func,
+        train_loss, train_acc, train_triplet_loss = eval_model_content(model, train_loader, train_loss_func,
                                                                      args.feature_size)
-        eval_loss, eval_acc, eval_triplet_loss = eval_model_content(model, eval_test_loader, eval_loss_func,
+        eval_loss, eval_acc, eval_triplet_loss = eval_model_content(model, test_loader, eval_loss_func,
                                                                   args.feature_size)
 
         # Learn rate

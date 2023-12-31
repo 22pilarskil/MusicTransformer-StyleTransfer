@@ -2,7 +2,7 @@ import torch
 
 
 def compute_triplet_distances(embeddings, labels, margin, return_all=False):
-    triplet_indices = create_triplet_mask(labels)
+    triplet_indices = create_triplet_mask_new(labels)
     anchor_embeddings = embeddings[triplet_indices[:, 0]]
     positive_embeddings = embeddings[triplet_indices[:, 1]]
     negative_embeddings = embeddings[triplet_indices[:, 2]]
@@ -36,3 +36,23 @@ def create_triplet_mask(labels):
     valid_triplet_indices = valid_triplets.nonzero(as_tuple=False)
     valid_triplet_indices = valid_triplet_indices[valid_triplet_indices[:, 0] != valid_triplet_indices[:, 1]]
     return valid_triplet_indices
+
+
+def create_triplet_mask_new(labels):
+    # Initialize empty mask
+    num_labels = len(labels)
+    valid_triplets = torch.zeros((num_labels, num_labels, num_labels), dtype=torch.bool)
+
+    for i in range(num_labels):
+        for j in range(num_labels):
+            if i == j:
+                continue
+            for k in range(num_labels):
+                if k == i:
+                    continue
+                # Mark as valid if i and j share at least one label, but k has no overlap with i
+                if not set(labels[i].numpy()).isdisjoint(set(labels[j].numpy())) and set(labels[i].numpy()).isdisjoint(set(labels[k].numpy())):
+                    valid_triplets[i, j, k] = True
+
+    return valid_triplets.nonzero(as_tuple=False)
+

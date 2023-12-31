@@ -14,6 +14,8 @@ from .constants import *
 from utilities.device import get_device
 from .lr_scheduling import get_lr
 
+import torch.nn as nn
+import torch.nn.functional as F
 from torch.cuda.amp import GradScaler, autocast
 
 from .tools import compute_triplet_distances
@@ -23,8 +25,23 @@ scaler = GradScaler()
 TRIPLET_MARGIN = 1.0
 triplet_loss_fn = torch.nn.TripletMarginLoss(margin=TRIPLET_MARGIN, p=2)
 CONTRASTIVE_MARGIN = 1.0
-contrastive_loss_fn = torch.nn.MarginRankingLoss(margin=CONTRASTIVE_MARGIN)
 torch.autograd.set_detect_anomaly(True)
+limit = 1000
+return_all = True
+
+class ContrastiveLoss(nn.Module):
+    def __init__(self, margin=1.0):
+        super(ContrastiveLoss, self).__init__()
+        self.margin = margin
+
+    def forward(self, output1, output2, label):
+        euclidean_distance = F.pairwise_distance(output1, output2)
+        loss_contrastive = torch.mean((1-label) * torch.pow(euclidean_distance, 2) +
+                                      (label) * torch.pow(torch.clamp(self.margin - euclidean_distance, min=0.0), 2))
+        return loss_contrastive
+
+
+contrastive_loss_fn = ContrastiveLoss(margin=CONTRASTIVE_MARGIN)
 
 # train_epoch
 def train_epoch_style(cur_epoch, model, dataloader, loss, opt, lr_scheduler=None, print_modulus=1, feature_size=0):
@@ -48,16 +65,19 @@ def train_epoch_style(cur_epoch, model, dataloader, loss, opt, lr_scheduler=None
                 x = sample[0].to(get_device())
                 tgt = sample[1].to(get_device())
 
-                with autocast():
-                    y = model(x)
-                    labels.append(label)
-                    style_embeddings.append(y.to('cpu'))
+               
+                y = model(x)
+                print(label)
+                labels.append(label)
+                style_embeddings.append(y.to('cpu'))
 
             style_embeddings = [j.reshape(1, feature_size) for i in style_embeddings for j in i]
-            labels = [j for i in labels for j in i]
+            labels = [j.to("cpu").unsqueeze(dim=-1) for i in labels for j in i]
+            #labels = torch.Tensor([j for i in labels for j in i])
+            print(labels)
             embeddings = torch.cat(style_embeddings, dim=0)
-            labels = torch.tensor(labels)
-            top_hard_triplets = compute_triplet_distances(embeddings, labels, TRIPLET_MARGIN)
+
+            top_hard_triplets = compute_triplet_distances(embeddings, labels, TRIPLET_MARGIN, return_all=return_all)
 
             top_anchor_embeddings = embeddings[top_hard_triplets[:, 0]]
             top_positive_embeddings = embeddings[top_hard_triplets[:, 1]]
@@ -117,26 +137,19 @@ def train_epoch_content(cur_epoch, model, dataloader, loss, opt, lr_scheduler=No
             opt.zero_grad()
             gc.collect()
             total_loss = 0
+
             for num, sample in enumerate(batch):
                 melody = sample[0].to(get_device())
                 harmony = sample[1].to(get_device())
-                combined = sample[1].to(get_device())
+                combined = sample[2].to(get_device())
 
-                with autocast():
-                    y_melody = model(melody).to('cpu')
-                    y_harmony = model(harmony).to('cpu')
-                    y_combined = model(combined).to('cpu')
+                y_melody = model(melody).to('cpu')
+                y_harmony = model(harmony).to('cpu')
+                y_combined = model(combined).to('cpu')
 
-            distance_melody_combined = torch.nn.functional.pairwise_distance(y_melody, y_combined)
-            distance_harmony_combined = torch.nn.functional.pairwise_distance(y_harmony, y_combined)
-            distance_melody_harmony = torch.nn.functional.pairwise_distance(y_melody, y_harmony)
-            shape = torch.zeros_like(distance_melody_combined)
-            similarity_labels = torch.full((shape.shape[0],), 1)
-            difference_labels = torch.full((shape.shape[0],), -1)
-
-            loss_melody_combined = contrastive_loss_fn(distance_melody_combined, shape, similarity_labels)
-            loss_harmony_combined = contrastive_loss_fn(distance_harmony_combined, shape, similarity_labels)
-            loss_melody_harmony = contrastive_loss_fn(distance_melody_harmony, shape, difference_labels)
+            loss_melody_combined = contrastive_loss_fn(y_melody, y_combined, 0)
+            loss_harmony_combined = contrastive_loss_fn(y_harmony, y_combined, 0)
+            loss_melody_harmony = contrastive_loss_fn(y_melody, y_harmony, 1)
 
             combined_loss = (loss_melody_combined + loss_harmony_combined + loss_melody_harmony).to("cuda:0")
 
@@ -170,6 +183,8 @@ def train_epoch_content(cur_epoch, model, dataloader, loss, opt, lr_scheduler=No
             batch_num += 1
 
             torch.cuda.empty_cache()
+           
+            if batch_num > limit: break
 
         except StopIteration:
             print(f"EPOCH {cur_epoch} finished!")
@@ -179,63 +194,6 @@ def train_epoch_content(cur_epoch, model, dataloader, loss, opt, lr_scheduler=No
 
 
 def eval_model_style(model, dataloader, loss, feature_size=0):
-    """
-    ----------
-    Author: Damon Gwinn
-    ----------
-    Evaluates the model and prints the average loss and accuracy
-    ----------
-    """
-
-    model.eval()
-    batch_num = 0
-    with torch.set_grad_enabled(False):
-        n_test      = len(dataloader)
-        sum_loss   = []
-        sum_acc    = 0.0
-        sum_combined_loss = 0.0
-        dataloader_iter = iter(dataloader)
-        while True:
-            try:
-                batch = next(dataloader_iter)
-
-                for num, sample in enumerate(batch):
-                    melody = sample[0].to(get_device())
-                    harmony = sample[1].to(get_device())
-                    combined = sample[1].to(get_device())
-
-                    with autocast():
-                        y_melody = model(melody).to('cpu')
-                        y_harmony = model(harmony).to('cpu')
-                        y_combined = model(combined).to('cpu')
-
-                distance_melody_combined = torch.nn.functional.pairwise_distance(y_melody, y_combined)
-                distance_harmony_combined = torch.nn.functional.pairwise_distance(y_harmony, y_combined)
-                distance_melody_harmony = torch.nn.functional.pairwise_distance(y_melody, y_harmony)
-                shape = torch.zeros_like(distance_melody_combined)
-                similarity_labels = torch.full((shape.shape[0],), 1)
-                difference_labels = torch.full((shape.shape[0],), -1)
-
-                loss_melody_combined = contrastive_loss_fn(distance_melody_combined, shape, similarity_labels)
-                loss_harmony_combined = contrastive_loss_fn(distance_harmony_combined, shape, similarity_labels)
-                loss_melody_harmony = contrastive_loss_fn(distance_melody_harmony, shape, difference_labels)
-
-                sum_combined_loss += float(loss_melody_combined + loss_harmony_combined + loss_melody_harmony)
-
-                batch_num += 1
-
-            except StopIteration:
-                break  # End of the dataset
-        sum_loss = np.array(sum_loss)
-        nan_count = np.sum(np.isnan(sum_loss))
-        avg_loss = np.nansum(sum_loss) / ((n_test * 3) - nan_count)
-        avg_acc     = sum_acc / n_test
-        avg_triplet_loss = sum_combined_loss / n_test
-
-    return avg_loss, avg_acc, avg_triplet_loss
-
-
-def eval_model_content(model, dataloader, loss, feature_size=0):
     """
     ----------
     Author: Damon Gwinn
@@ -260,15 +218,17 @@ def eval_model_content(model, dataloader, loss, feature_size=0):
                 for num, sample in enumerate(batch[:3]):
                     x = sample[0].to(get_device())
                     tgt = sample[1].to(get_device())
-
                     with autocast():
                         y = model(x)
                         style_embeddings.append(y)
 
                 triplet_loss = triplet_loss_fn(style_embeddings[0], style_embeddings[1], style_embeddings[2])
                 sum_triplet_loss += float(triplet_loss)
-
+              
                 batch_num += 1
+                print("BATCH", batch_num)
+                if batch_num > limit: break
+
 
             except StopIteration:
                 break  # End of the dataset
@@ -281,7 +241,7 @@ def eval_model_content(model, dataloader, loss, feature_size=0):
     return avg_loss, avg_acc, avg_triplet_loss
 
 
-def eval_triplets(model, dataloader, iterations=40):
+def eval_model_content(model, dataloader, loss, feature_size=0):
     """
     ----------
     Author: Damon Gwinn
@@ -291,7 +251,58 @@ def eval_triplets(model, dataloader, iterations=40):
     """
 
     model.eval()
+    batch_num = 0
+    with torch.set_grad_enabled(False):
+        n_test      = len(dataloader)
+        sum_loss   = []
+        sum_acc    = 0.0
+        sum_combined_loss = 0.0
+        dataloader_iter = iter(dataloader)
+        while True:
+            try:
+                batch = next(dataloader_iter)
 
+                for num, sample in enumerate(batch):
+                    melody = sample[0].to(get_device())
+                    harmony = sample[1].to(get_device())
+                    combined = sample[2].to(get_device())
+
+                    
+                    y_melody = model(melody).to('cpu')
+                    y_harmony = model(harmony).to('cpu')
+                    y_combined = model(combined).to('cpu')
+
+                loss_melody_combined = contrastive_loss_fn(y_melody, y_combined, 0)
+                loss_harmony_combined = contrastive_loss_fn(y_harmony, y_combined, 0)
+                loss_melody_harmony = contrastive_loss_fn(y_melody, y_harmony, 1)
+
+                combined_loss = float(loss_melody_combined + loss_harmony_combined + loss_melody_harmony)
+                sum_combined_loss += combined_loss
+                batch_num += 1
+                print("BATCH_NUM", batch_num, combined_loss)
+                if batch_num > limit: 
+                    print("BREAKING")
+                    break
+
+            except StopIteration:
+                break  # End of the dataset
+        avg_loss = sum_combined_loss / batch_num
+
+    return avg_loss, 0, 0
+
+
+
+def eval_triplets(model, dataloader, iterations=40, file_path="style_embeddings_clusters.png"):
+    """
+    ----------
+    Author: Damon Gwinn
+    ----------
+    Evaluates the model and prints the average loss and accuracy
+    ----------
+    """
+
+    model.eval()
+    plt.clf()
     avg_acc     = -1
     avg_loss    = -1
     batch_num = 0
@@ -365,7 +376,8 @@ def eval_triplets(model, dataloader, iterations=40):
         # Normalizing the score to be between 0 and 100
         plt.legend()
         plt.title("Style Embedding Clusters - Score {}".format(silhouette_avg))
-        plt.savefig('style_embedding_clusters.png')
+        plt.savefig(file_path)
+        plt.close()
         return 0, 0, silhouette_avg
 
 

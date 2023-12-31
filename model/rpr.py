@@ -166,7 +166,7 @@ class MultiheadAttentionRPR(Module):
             #     attn_mask=attn_mask, use_separate_proj_weight=True,
             #     q_proj_weight=self.q_proj_weight, k_proj_weight=self.k_proj_weight,
             #     v_proj_weight=self.v_proj_weight)
-            print("_qkv_same_embed_dim False")
+            # print("_qkv_same_embed_dim False")
             return multi_head_attention_forward_rpr(
                 query, key, value, self.embed_dim, self.num_heads,
                 self.in_proj_weight, self.in_proj_bias,
@@ -191,7 +191,7 @@ class MultiheadAttentionRPR(Module):
             #     training=self.training,
             #     key_padding_mask=key_padding_mask, need_weights=need_weights,
             #     attn_mask=attn_mask)
-            print("_qkv_same_embed_dim True")
+            # print("_qkv_same_embed_dim True")
             return multi_head_attention_forward_rpr(
                 query, key, value, self.embed_dim, self.num_heads,
                 self.in_proj_weight, self.in_proj_bias,
@@ -252,13 +252,13 @@ def multi_head_attention_forward_rpr(query,                       # type: Tensor
     head_dim = embed_dim // num_heads
     assert head_dim * num_heads == embed_dim, "embed_dim must be divisible by num_heads"
     scaling = float(head_dim) ** -0.5
-    print("SEPARATE", use_separate_proj_weight)
-    print("SAME", qkv_same)
+    # print("SEPARATE", use_separate_proj_weight)
+    # print("SAME", qkv_same)
     if use_separate_proj_weight is not True:
         if qkv_same:
             # self-attention
             q, k, v = linear(query, in_proj_weight, in_proj_bias).chunk(3, dim=-1)
-            print("HERE", torch.equal(q, k))
+            # print("HERE", torch.equal(q, k))
            
 
         elif kv_same:

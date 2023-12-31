@@ -114,9 +114,9 @@ class TripletSelector(Dataset):
 
 class EmbeddingsDataset(Dataset):
 
-    def __init__(self, root):
+    def __init__(self, root, max_seq):
         self.root = root
-
+        self.max_seq = max_seq
         fs = [os.path.join(root, f) for f in os.listdir(self.root)]
         self.data_files = [f for f in fs if os.path.isfile(f)]
         print("LENGTH", len(self.data_files))
@@ -125,14 +125,16 @@ class EmbeddingsDataset(Dataset):
         return len(self.data_files)
 
     def __getitem__(self, idx):
-        print("OPENING")
+        idx = random.randint(0, len(self.data_files) - 1)
         i_stream = open(self.data_files[idx], "rb")
         raw_data = pickle.load(i_stream)
-        raw_data[0] = torch.Tensor(raw_data[0]).int()
-        raw_data[1] = torch.Tensor(raw_data[1]).int()
-        raw_data[2] = torch.Tensor(raw_data[2]).int()
+        sample = []
+        for data in raw_data[:3]:
+            x, tgt = process_midi(torch.Tensor(data).int(), self.max_seq, False)
+            sample.append(x) 
+        sample.append(raw_data[3])
         i_stream.close()
-        return raw_data
+        return [sample]
 
 
 # process_midi
@@ -208,15 +210,15 @@ def create_randomized_batching_datasets(dataset_root, max_seq, random_seq=True):
     return train_dataset, val_dataset, test_dataset
 
 
-def create_embedding_datasets(dataset_root):
+def create_embedding_datasets(dataset_root, max_seq):
 
     train_root = os.path.join(dataset_root, "train")
     val_root = os.path.join(dataset_root, "val")
     test_root = os.path.join(dataset_root, "test")
 
-    train_dataset = EmbeddingsDataset(train_root)
-    val_dataset = EmbeddingsDataset(val_root)
-    test_dataset = EmbeddingsDataset(test_root)
+    train_dataset = EmbeddingsDataset(train_root, max_seq)
+    val_dataset = EmbeddingsDataset(val_root, max_seq)
+    test_dataset = EmbeddingsDataset(test_root, max_seq)
 
     return train_dataset, val_dataset, test_dataset
 

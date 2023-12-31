@@ -16,7 +16,7 @@ from utilities.constants import *
 from utilities.device import get_device, use_cuda
 from utilities.lr_scheduling import LrStepTracker, get_lr
 from utilities.argument_funcs import parse_train_args, print_train_args, write_model_params
-from utilities.run_model import train_epoch_style, eval_model_style
+from utilities.run_model import train_epoch_style, eval_model_style, eval_triplets
 
 CSV_HEADER = ["Epoch", "Learn rate", "Avg Train loss", "Train Accuracy", "Train TL", "Avg Eval loss", "Eval accuracy", "Eval TL"]
 
@@ -74,11 +74,15 @@ def main():
         train_dataset, _, _ = create_triplet_datasets(args.input_dir, args.max_sequence)
         print(train_dataset)
 
+    _, val_dataset, _ = create_triplet_datasets(args.input_dir, args.max_sequence)
+
     eval_train_dataset, eval_test_dataset, _ = create_triplet_datasets(args.input_dir, args.max_sequence)
 
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, num_workers=args.n_workers, shuffle=True)
     eval_train_loader = DataLoader(eval_train_dataset, batch_size=args.batch_size, num_workers=args.n_workers)
     eval_test_loader = DataLoader(eval_test_dataset, batch_size=args.batch_size, num_workers=args.n_workers)
+    val_loader = DataLoader(val_dataset, batch_size=1, num_workers=args.n_workers)
+
     model = MusicTransformer(n_layers=args.n_layers, num_heads=args.num_heads,
                 feature_size=args.feature_size, d_model=args.d_model, dim_feedforward=args.dim_feedforward, dropout=args.dropout,
                 transition_features=args.transition_features, reduction_factor=args.reduction_factor, max_sequence=args.max_sequence, rpr=args.rpr).to(get_device())
@@ -168,9 +172,10 @@ def main():
             print("Baseline model evaluation (Epoch 0):")
 
         # Eval
+        epoch_str = str(epoch+1).zfill(PREPEND_ZEROS_WIDTH)
+        eval_triplets(model, val_loader, 80, file_path=os.path.join(results_folder, "epoch_" + epoch_str + ".png"))
         train_loss, train_acc, train_triplet_loss = eval_model_style(model, eval_train_loader, train_loss_func, args.feature_size)
         eval_loss, eval_acc, eval_triplet_loss = eval_model_style(model, eval_test_loader, eval_loss_func, args.feature_size)
-
         # Learn rate
         lr = get_lr(opt)
 
@@ -217,7 +222,6 @@ def main():
             tensorboard_summary.flush()
 
         if((epoch+1) % args.weight_modulus == 0):
-            epoch_str = str(epoch+1).zfill(PREPEND_ZEROS_WIDTH)
             path = os.path.join(weights_folder, "epoch_" + epoch_str + ".pickle")
             torch.save(model.state_dict(), path)
 
