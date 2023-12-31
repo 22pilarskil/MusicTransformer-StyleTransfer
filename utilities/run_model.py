@@ -73,8 +73,6 @@ def train_epoch_style(cur_epoch, model, dataloader, loss, opt, lr_scheduler=None
 
             style_embeddings = [j.reshape(1, feature_size) for i in style_embeddings for j in i]
             labels = [j.to("cpu").unsqueeze(dim=-1) for i in labels for j in i]
-            #labels = torch.Tensor([j for i in labels for j in i])
-            print(labels)
             embeddings = torch.cat(style_embeddings, dim=0)
 
             top_hard_triplets = compute_triplet_distances(embeddings, labels, TRIPLET_MARGIN, return_all=return_all)
@@ -131,6 +129,8 @@ def train_epoch_content(cur_epoch, model, dataloader, loss, opt, lr_scheduler=No
     dataloader_iter = iter(dataloader)
     while True:
         try:
+            content_embeddings = []
+            labels = []
             batch = next(dataloader_iter)
             time_before = time.time()
 
@@ -147,11 +147,22 @@ def train_epoch_content(cur_epoch, model, dataloader, loss, opt, lr_scheduler=No
                 y_harmony = model(harmony).to('cpu')
                 y_combined = model(combined).to('cpu')
 
-            loss_melody_combined = contrastive_loss_fn(y_melody, y_combined, 0)
-            loss_harmony_combined = contrastive_loss_fn(y_harmony, y_combined, 0)
-            loss_melody_harmony = contrastive_loss_fn(y_melody, y_harmony, 1)
+                content_embeddings.extend([y_melody, y_harmony, y_combined])
+                labels.extend([num * 3, [(num * 3) + 1, (num * 3) + 2], (num * 3) + 2 ])
 
-            combined_loss = (loss_melody_combined + loss_harmony_combined + loss_melody_harmony).to("cuda:0")
+            content_embeddings = [j.reshape(1, feature_size) for i in content_embeddings for j in i]
+            labels = [j.to("cpu").unsqueeze(dim=-1) for i in labels for j in i]
+            embeddings = torch.cat(content_embeddings, dim=0)
+
+            top_hard_triplets = compute_triplet_distances(embeddings, labels, TRIPLET_MARGIN, return_all=return_all)
+
+            top_anchor_embeddings = embeddings[top_hard_triplets[:, 0]]
+            top_positive_embeddings = embeddings[top_hard_triplets[:, 1]]
+            top_negative_embeddings = embeddings[top_hard_triplets[:, 2]]
+
+            triplet_loss = triplet_loss_fn(top_anchor_embeddings, top_positive_embeddings, top_negative_embeddings)
+            print(triplet_loss)
+            combined_loss = triplet_loss.to("cuda:0")
 
             scaler.scale(combined_loss).backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
