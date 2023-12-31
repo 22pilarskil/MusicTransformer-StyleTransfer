@@ -5,7 +5,7 @@ python3 train_content.py \
 -feature_size 128 \
 -input_dir ../dataset_separated \
 -output_dir ../results_content_dataset_separated \
--batch_size 1 \
+-batch_size 4 \
 -n_workers 0 \
 -max_sequence 1000 \
 -transition_features 64 \

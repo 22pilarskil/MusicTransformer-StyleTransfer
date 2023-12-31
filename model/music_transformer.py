@@ -53,23 +53,14 @@ class MusicTransformer(nn.Module):
         # Positional encoding
         self.positional_encoding = PositionalEncoding(self.d_model, self.dropout, self.max_seq)
 
-        encoder_norm_style = LayerNorm(self.d_model)
-        encoder_layer_style = TransformerEncoderLayerRPR(self.d_model, self.nhead, self.d_ff, self.dropout, er_len=self.max_seq)
-        encoder_style = TransformerEncoderRPR(encoder_layer_style, self.style_layer, encoder_norm_style)
+        encoder_norm = LayerNorm(self.d_model)
+        encoder_layer = TransformerEncoderLayerRPR(self.d_model, self.nhead, self.d_ff, self.dropout, er_len=self.max_seq)
+        encoder = TransformerEncoderRPR(encoder_layer, self.nlayers, encoder_norm)
 
-        encoder_norm_main = LayerNorm(self.d_model)
-        encoder_layer_main = TransformerEncoderLayerRPR(self.d_model, self.nhead, self.d_ff, self.dropout, er_len=self.max_seq)
-        encoder_main = TransformerEncoderRPR(encoder_layer_style, self.nlayers - self.style_layer, encoder_norm_style)
-
-        self.transformer_style = nn.Transformer(
-            d_model=self.d_model, nhead=self.nhead, num_encoder_layers=self.style_layer,
+        self.transformer = nn.Transformer(
+            d_model=self.d_model, nhead=self.nhead, num_encoder_layers=self.nlayers,
             num_decoder_layers=0, dropout=self.dropout, # activation=self.ff_activ,
-            dim_feedforward=self.d_ff, custom_decoder=self.dummy, custom_encoder=encoder_style
-        )
-        self.transformer_main = nn.Transformer(
-            d_model=self.d_model, nhead=self.nhead, num_encoder_layers=self.nlayers - self.style_layer,
-            num_decoder_layers=0, dropout=self.dropout, # activation=self.ff_activ,
-            dim_feedforward=self.d_ff, custom_decoder=self.dummy, custom_encoder=encoder_main
+            dim_feedforward=self.d_ff, custom_decoder=self.dummy, custom_encoder=encoder
         )
 
         self.flatten = nn.Flatten()
@@ -95,8 +86,7 @@ class MusicTransformer(nn.Module):
         """
 
         if(mask is True):
-            mask_style = self.transformer_style.generate_square_subsequent_mask(x.shape[1]).to(get_device())
-            mask_main = self.transformer_main.generate_square_subsequent_mask(x.shape[1]).to(get_device())
+            mask = self.transformer.generate_square_subsequent_mask(x.shape[1]).to(get_device())
         else:
             mask = None
 
@@ -109,9 +99,8 @@ class MusicTransformer(nn.Module):
 
         # Since there are no true decoder layers, the tgt is unused
         # Pytorch wants src and tgt to have some equal dims however
-        style_embedding = self.transformer_style(src=positional_embedding, tgt=positional_embedding, src_mask=mask_style)
+        x_out = self.transformer(src=positional_embedding, tgt=positional_embedding, src_mask=mask)
 
-        x_out = self.transformer_main(src=style_embedding, tgt=style_embedding, src_mask=mask_main)
         x_out = x_out.permute(1,0,2)
 
         x = self.linear(x_out)

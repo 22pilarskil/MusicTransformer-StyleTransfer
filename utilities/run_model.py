@@ -139,6 +139,7 @@ def train_epoch_content(cur_epoch, model, dataloader, loss, opt, lr_scheduler=No
             total_loss = 0
 
             for num, sample in enumerate(batch):
+                print(sample.shape)              
                 melody = sample[0].to(get_device())
                 harmony = sample[1].to(get_device())
                 combined = sample[2].to(get_device())
@@ -146,11 +147,12 @@ def train_epoch_content(cur_epoch, model, dataloader, loss, opt, lr_scheduler=No
                 y_melody = model(melody).to('cpu')
                 y_harmony = model(harmony).to('cpu')
                 y_combined = model(combined).to('cpu')
-
+                print(num)
                 content_embeddings.extend([y_melody, y_harmony, y_combined])
                 labels.extend([num * 3, [(num * 3) + 1, (num * 3) + 2], (num * 3) + 2 ])
 
             content_embeddings = [j.reshape(1, feature_size) for i in content_embeddings for j in i]
+            print(labels)
             labels = [j.to("cpu").unsqueeze(dim=-1) for i in labels for j in i]
             embeddings = torch.cat(content_embeddings, dim=0)
 

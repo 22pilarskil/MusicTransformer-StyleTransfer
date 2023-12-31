@@ -134,7 +134,7 @@ class EmbeddingsDataset(Dataset):
             sample.append(x) 
         sample.append(raw_data[3])
         i_stream.close()
-        return [sample]
+        return sample
 
 
 # process_midi
