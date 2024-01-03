@@ -42,7 +42,7 @@ class ContrastiveLoss(nn.Module):
 
 
 contrastive_loss_fn = ContrastiveLoss(margin=CONTRASTIVE_MARGIN)
-
+# contrastive_loss_fn = nn.CosineEmbeddingLoss(margin=CONTRASTIVE_MARGIN)  
 # train_epoch
 def train_epoch_style(cur_epoch, model, dataloader, loss, opt, lr_scheduler=None, print_modulus=1, feature_size=0):
 
@@ -67,11 +67,13 @@ def train_epoch_style(cur_epoch, model, dataloader, loss, opt, lr_scheduler=None
 
                
                 y = model(x)
-                print(label)
+                print(y.shape)
                 labels.append(label)
                 style_embeddings.append(y.to('cpu'))
 
             style_embeddings = [j.reshape(1, feature_size) for i in style_embeddings for j in i]
+            print(len(style_embeddings))
+            print(style_embeddings[0].shape)
             labels = [j.to("cpu").unsqueeze(dim=-1) for i in labels for j in i]
             embeddings = torch.cat(style_embeddings, dim=0)
 
@@ -138,22 +140,38 @@ def train_epoch_content(cur_epoch, model, dataloader, loss, opt, lr_scheduler=No
             gc.collect()
             total_loss = 0
 
-            for num, sample in enumerate(batch):
-                print(sample.shape)              
-                melody = sample[0].to(get_device())
-                harmony = sample[1].to(get_device())
-                combined = sample[2].to(get_device())
+            y_melody = model(batch[0].to(get_device())).to("cpu")
+            y_harmony = model(batch[1].to(get_device())).to("cpu")
+            y_combined = model(batch[2].to(get_device())).to("cpu")
+            
+            batch_size = dataloader.batch_size
+            labels = []
 
-                y_melody = model(melody).to('cpu')
-                y_harmony = model(harmony).to('cpu')
-                y_combined = model(combined).to('cpu')
-                print(num)
-                content_embeddings.extend([y_melody, y_harmony, y_combined])
-                labels.extend([num * 3, [(num * 3) + 1, (num * 3) + 2], (num * 3) + 2 ])
+            labels.extend([torch.Tensor([2 * i]).to("cpu").int() for i in range(batch_size)])
+            labels.extend([torch.Tensor([2 * i + 1]).to("cpu").int() for i in range(batch_size)])
+            labels.extend([torch.Tensor([2 * i, 2 * i + 1]).to("cpu").int() for i in range(batch_size)])
 
+
+            label_similar = torch.tensor([0]) #torch.tensor([1], dtype=torch.float32)
+            label_different = torch.tensor([1]) # torch.tensor([-1], dtype=torch.float32) 
+            print(y_melody[0])
+            print(y_harmony[0])
+            print(y_combined[0])
+            loss_melody_combined = contrastive_loss_fn(y_melody, y_combined, label_similar)
+            loss_harmony_combined = contrastive_loss_fn(y_harmony, y_combined, label_similar)
+            loss_melody_harmony = contrastive_loss_fn(y_melody, y_harmony, label_different)
+
+
+            print(loss_melody_combined)
+            print(loss_harmony_combined)
+            print(loss_melody_harmony)
+            combined_loss = (loss_melody_combined / 2 + loss_harmony_combined / 2 + loss_melody_harmony * 2).to(get_device())
+
+
+            '''
+            content_embeddings = [y_melody, y_harmony, y_combined]
             content_embeddings = [j.reshape(1, feature_size) for i in content_embeddings for j in i]
             print(labels)
-            labels = [j.to("cpu").unsqueeze(dim=-1) for i in labels for j in i]
             embeddings = torch.cat(content_embeddings, dim=0)
 
             top_hard_triplets = compute_triplet_distances(embeddings, labels, TRIPLET_MARGIN, return_all=return_all)
@@ -165,6 +183,7 @@ def train_epoch_content(cur_epoch, model, dataloader, loss, opt, lr_scheduler=No
             triplet_loss = triplet_loss_fn(top_anchor_embeddings, top_positive_embeddings, top_negative_embeddings)
             print(triplet_loss)
             combined_loss = triplet_loss.to("cuda:0")
+            '''
 
             scaler.scale(combined_loss).backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
@@ -190,9 +209,6 @@ def train_epoch_content(cur_epoch, model, dataloader, loss, opt, lr_scheduler=No
                 print("")
 
             del combined_loss
-            del loss_melody_combined
-            del loss_harmony_combined
-            del loss_melody_harmony
             batch_num += 1
 
             torch.cuda.empty_cache()
@@ -275,20 +291,17 @@ def eval_model_content(model, dataloader, loss, feature_size=0):
             try:
                 batch = next(dataloader_iter)
 
-                for num, sample in enumerate(batch):
-                    melody = sample[0].to(get_device())
-                    harmony = sample[1].to(get_device())
-                    combined = sample[2].to(get_device())
+                y_melody = model(batch[0].to(get_device())).to("cpu")
+                y_harmony = model(batch[1].to(get_device())).to("cpu")
+                y_combined = model(batch[2].to(get_device())).to("cpu")
 
-                    
-                    y_melody = model(melody).to('cpu')
-                    y_harmony = model(harmony).to('cpu')
-                    y_combined = model(combined).to('cpu')
+                label_similar = torch.tensor([0]) #torch.tensor([1], dtype=torch.float32)
+                label_different = torch.tensor([1]) # torch.tensor([-1], dtype=torch.float32) 
 
-                loss_melody_combined = contrastive_loss_fn(y_melody, y_combined, 0)
-                loss_harmony_combined = contrastive_loss_fn(y_harmony, y_combined, 0)
-                loss_melody_harmony = contrastive_loss_fn(y_melody, y_harmony, 1)
-
+                loss_melody_combined = contrastive_loss_fn(y_melody, y_combined, label_similar)
+                loss_harmony_combined = contrastive_loss_fn(y_harmony, y_combined, label_similar)
+                loss_melody_harmony = contrastive_loss_fn(y_melody, y_harmony, label_different)
+               
                 combined_loss = float(loss_melody_combined + loss_harmony_combined + loss_melody_harmony)
                 sum_combined_loss += combined_loss
                 batch_num += 1
@@ -338,6 +351,7 @@ def eval_triplets(model, dataloader, iterations=40, file_path="style_embeddings_
                     tgt = sample[1].to(get_device())
                     print(x.shape)
                     y = model(x)
+                    print(y)
                     style_embeddings.append(y.flatten().cpu().numpy())
                     style_embeddings_tensor.append(y)
                     # style_embeddings.append(style_embedding.flatten().cpu().numpy())
