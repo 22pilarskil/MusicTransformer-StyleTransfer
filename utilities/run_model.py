@@ -29,6 +29,50 @@ torch.autograd.set_detect_anomaly(True)
 limit = 1000
 return_all = True
 
+
+def average_pairwise_distance(batch):
+    batch_size = batch.shape[0]
+    total_distance = 0.0
+    num_pairs = 0
+
+    # Iterate over each element in the batch
+    for i in range(batch_size):
+        for j in range(i + 1, batch_size):
+            # Compute Euclidean distance between elements i and j
+            distance = F.pairwise_distance(batch[i].unsqueeze(0), batch[j].unsqueeze(0))
+            total_distance += distance.item()
+            num_pairs += 1
+
+    # Average distance
+    average_distance = total_distance / num_pairs
+    return average_distance
+
+
+def average_pairwise_distance_across_batches(batches):
+    num_batches = len(batches)
+    batch_size = batches[0].shape[0]
+    similarity = 0.0
+    num_similarity = 0
+    difference = 0.0
+    num_difference = 0
+    sum_melody_similarity = 0.0
+
+    for i in range(batch_size):
+        for batch_idx1 in range(num_batches):
+            difference += average_pairwise_distance(batches[batch_idx1])
+            num_difference += 1
+        melody_similarity = F.pairwise_distance(batches[0][i].unsqueeze(0), batches[2][i].unsqueeze(0)).item()
+        sum_melody_similarity += melody_similarity
+        similarity += melody_similarity
+        similarity += F.pairwise_distance(batches[1][i].unsqueeze(0), batches[2][i].unsqueeze(0)).item()
+        num_similarity += 2
+
+    avg_difference = difference / num_difference
+    avg_similarity = similarity / num_similarity
+    avg_melody_similarity = similarity / (num_similarity / 2)
+    return avg_difference, avg_similarity, avg_melody_similarity
+
+
 class ContrastiveLoss(nn.Module):
     def __init__(self, margin=1.0):
         super(ContrastiveLoss, self).__init__()
@@ -40,10 +84,15 @@ class ContrastiveLoss(nn.Module):
                                       (label) * torch.pow(torch.clamp(self.margin - euclidean_distance, min=0.0), 2))
         return loss_contrastive
 
+use_triplet = True
+cosine_loss = True
+if cosine_loss:
+    contrastive_loss_fn = nn.CosineEmbeddingLoss(margin=CONTRASTIVE_MARGIN)  
+else:
+    contrastive_loss_fn = ContrastiveLoss(margin=CONTRASTIVE_MARGIN)
 
-contrastive_loss_fn = ContrastiveLoss(margin=CONTRASTIVE_MARGIN)
-# contrastive_loss_fn = nn.CosineEmbeddingLoss(margin=CONTRASTIVE_MARGIN)  
 # train_epoch
+
 def train_epoch_style(cur_epoch, model, dataloader, loss, opt, lr_scheduler=None, print_modulus=1, feature_size=0):
 
     model.train()
@@ -151,39 +200,42 @@ def train_epoch_content(cur_epoch, model, dataloader, loss, opt, lr_scheduler=No
             labels.extend([torch.Tensor([2 * i + 1]).to("cpu").int() for i in range(batch_size)])
             labels.extend([torch.Tensor([2 * i, 2 * i + 1]).to("cpu").int() for i in range(batch_size)])
 
+            if not use_triplet:
 
-            label_similar = torch.tensor([0]) #torch.tensor([1], dtype=torch.float32)
-            label_different = torch.tensor([1]) # torch.tensor([-1], dtype=torch.float32) 
-            print(y_melody[0])
-            print(y_harmony[0])
-            print(y_combined[0])
-            loss_melody_combined = contrastive_loss_fn(y_melody, y_combined, label_similar)
-            loss_harmony_combined = contrastive_loss_fn(y_harmony, y_combined, label_similar)
-            loss_melody_harmony = contrastive_loss_fn(y_melody, y_harmony, label_different)
-
-
-            print(loss_melody_combined)
-            print(loss_harmony_combined)
-            print(loss_melody_harmony)
-            combined_loss = (loss_melody_combined / 2 + loss_harmony_combined / 2 + loss_melody_harmony * 2).to(get_device())
+                if cosine_loss:
+                    label_similar = torch.tensor([1], dtype=torch.float32)
+                    label_different = torch.tensor([-1], dtype=torch.float32)
+                else:
+                    label_similar = torch.tensor([0])
+                    label_different = torch.tensor([1])
+ 
+                loss_melody_combined = contrastive_loss_fn(y_melody, y_combined, label_similar)
+                loss_harmony_combined = contrastive_loss_fn(y_harmony, y_combined, label_similar)
+                loss_melody_harmony = contrastive_loss_fn(y_melody, y_harmony, label_different)
 
 
-            '''
-            content_embeddings = [y_melody, y_harmony, y_combined]
-            content_embeddings = [j.reshape(1, feature_size) for i in content_embeddings for j in i]
-            print(labels)
-            embeddings = torch.cat(content_embeddings, dim=0)
+                combined_loss = (loss_melody_combined / 2 + loss_harmony_combined / 2 + loss_melody_harmony * 2).to(get_device())
+            
+            else:
 
-            top_hard_triplets = compute_triplet_distances(embeddings, labels, TRIPLET_MARGIN, return_all=return_all)
+                labels = []
 
-            top_anchor_embeddings = embeddings[top_hard_triplets[:, 0]]
-            top_positive_embeddings = embeddings[top_hard_triplets[:, 1]]
-            top_negative_embeddings = embeddings[top_hard_triplets[:, 2]]
+                labels.extend([torch.Tensor([i]).to("cpu").int() for i in range(batch_size)])
+                labels.extend([torch.Tensor([i]).to("cpu").int() for i in range(batch_size)])
 
-            triplet_loss = triplet_loss_fn(top_anchor_embeddings, top_positive_embeddings, top_negative_embeddings)
-            print(triplet_loss)
-            combined_loss = triplet_loss.to("cuda:0")
-            '''
+                content_embeddings = [y_melody, y_combined]
+                content_embeddings = [j.reshape(1, feature_size) for i in content_embeddings for j in i]
+                embeddings = torch.cat(content_embeddings, dim=0)
+
+                top_hard_triplets = compute_triplet_distances(embeddings, labels, TRIPLET_MARGIN, return_all=True)
+
+                top_anchor_embeddings = embeddings[top_hard_triplets[:, 0]]
+                top_positive_embeddings = embeddings[top_hard_triplets[:, 1]]
+                top_negative_embeddings = embeddings[top_hard_triplets[:, 2]]
+
+                triplet_loss = triplet_loss_fn(top_anchor_embeddings, top_positive_embeddings, top_negative_embeddings)
+                combined_loss = triplet_loss.to("cuda:0")
+
 
             scaler.scale(combined_loss).backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
@@ -286,6 +338,9 @@ def eval_model_content(model, dataloader, loss, feature_size=0):
         sum_loss   = []
         sum_acc    = 0.0
         sum_combined_loss = 0.0
+        sum_similarity = 0.0
+        sum_difference = 0.0
+        sum_melody_similarity = 0.0
         dataloader_iter = iter(dataloader)
         while True:
             try:
@@ -295,27 +350,26 @@ def eval_model_content(model, dataloader, loss, feature_size=0):
                 y_harmony = model(batch[1].to(get_device())).to("cpu")
                 y_combined = model(batch[2].to(get_device())).to("cpu")
 
-                label_similar = torch.tensor([0]) #torch.tensor([1], dtype=torch.float32)
-                label_different = torch.tensor([1]) # torch.tensor([-1], dtype=torch.float32) 
+                batches = [y_melody, y_harmony, y_combined]
 
-                loss_melody_combined = contrastive_loss_fn(y_melody, y_combined, label_similar)
-                loss_harmony_combined = contrastive_loss_fn(y_harmony, y_combined, label_similar)
-                loss_melody_harmony = contrastive_loss_fn(y_melody, y_harmony, label_different)
-               
-                combined_loss = float(loss_melody_combined + loss_harmony_combined + loss_melody_harmony)
-                sum_combined_loss += combined_loss
+                difference, similarity, melody_similarity = average_pairwise_distance_across_batches(batches)
+        
+                sum_similarity += similarity
+                sum_melody_similarity += melody_similarity
+                sum_difference += difference
+        
                 batch_num += 1
-                print("BATCH_NUM", batch_num, combined_loss)
-                if batch_num > limit: 
+                print("BATCH_NUM", batch_num, round(float(difference), 3), round(float(similarity), 3), round(float(melody_similarity), 3))
+                if batch_num > limit:
                     print("BREAKING")
                     break
 
             except StopIteration:
                 break  # End of the dataset
-        avg_loss = sum_combined_loss / batch_num
-
-    return avg_loss, 0, 0
-
+        avg_similarity = sum_similarity / batch_num
+        avg_difference = sum_difference / batch_num
+        avg_melody_similarity = sum_melody_similarity / batch_num
+        return avg_melody_similarity, avg_similarity, avg_difference
 
 
 def eval_triplets(model, dataloader, iterations=40, file_path="style_embeddings_clusters.png"):
