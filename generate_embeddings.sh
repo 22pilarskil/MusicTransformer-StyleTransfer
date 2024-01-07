@@ -1,7 +1,7 @@
 python3 generate_embeddings.py \
--input_dir ../dataset_separated \
--continue_weights ../results_3_genres/weights/epoch_0034.pickle \
--max_sequence 2048 --rpr \
--output_dir ../dataset_separated_embeddings \
--batch_size 1
+-input_dir ../dataset_no_separation \
+-max_sequence 1000 --rpr \
+-output_dir ../dataset_embeddings \
+-batch_size 1 \
+-feature_size 128\
 

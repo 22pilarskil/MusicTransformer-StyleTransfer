@@ -46,9 +46,10 @@ class MusicTransformer(nn.Module):
         self.feature_size = feature_size
         self.reduction_factor = reduction_factor
         self.transition_features = transition_features
-
+        
+        adjusted_vocab_size = VOCAB_SIZE - 1 # Account for added start token
         # Input embedding
-        self.embedding = nn.Embedding(VOCAB_SIZE, self.d_model)
+        self.embedding = nn.Embedding(adjusted_vocab_size, self.d_model)
 
         # Positional encoding
         self.positional_encoding = PositionalEncoding(self.d_model, self.dropout, self.max_seq)
@@ -67,10 +68,7 @@ class MusicTransformer(nn.Module):
         self.linear = nn.Linear(in_features=512, out_features=self.reduction_factor)
         self.conv1d = nn.Conv1d(in_channels=self.reduction_factor, out_channels=self.transition_features, kernel_size=3, stride=1, padding=1)
         
-        if self.feature_size:
-            self.Wout = nn.Linear(in_features=self.transition_features * self.max_seq, out_features=self.feature_size)
-        else:
-            self.Wout = nn.Linear(in_features=self.transition_features * self.max_seq, out_features=VOCAB_SIZE)
+        self.Wout = nn.Linear(in_features=self.transition_features * self.max_seq, out_features=self.feature_size)
 
 
     # forward

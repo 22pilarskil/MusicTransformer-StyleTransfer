@@ -464,7 +464,7 @@ def eval_triplets(model, dataloader, iterations=40, file_path="style_embeddings_
 
 
 
-def generate_embeddings(model, dataloaders, output_dir):
+def generate_embeddings(style_model, content_model, dataloaders, output_dir):
     """
     ----------
     Author: Damon Gwinn
@@ -473,7 +473,8 @@ def generate_embeddings(model, dataloaders, output_dir):
     ----------
     """
 
-    model.eval()
+    style_model.eval()
+    content_model.eval()
 
     if os.path.exists(output_dir):
         shutil.rmtree(output_dir)
@@ -487,21 +488,19 @@ def generate_embeddings(model, dataloaders, output_dir):
             while True:
                 try:
                     batch = next(dataloader_iter)
-                    label = "classical" if "classical_pos" in batch[3] else "jazz"
-                    for num, sample in enumerate(batch[:2]):
 
-                        x = sample[0].to(get_device())
-                        tgt = sample[1].to(get_device())
+                    x = batch[0].to(get_device())
+                    tgt = batch[1].to(get_device())
 
-                        y = model(x)
+                    style_embedding = style_model(x)
+                    content_embedding = content_model(x)
+                    print(style_embedding.shape)
+                    count += 1
+                    file_path = os.path.join(output_dir, dataloader, f"{dataloader}_{count}.pkl")
+                    with open(file_path, 'wb') as file:
+                        pickle.dump([x, style_embedding, content_embedding, tgt], file)
 
-                        count += 1
-                        file_path = os.path.join(output_dir, dataloader, f"{dataloader}_{count}.pkl")
-                        with open(file_path, 'wb') as file:
-                            pickle.dump([x, y, label], file)
-
-                        print(f"File saved to {file_path} with label {label}")
-                       
+                    print(f"File saved to {file_path}")
 
                 except StopIteration:
                     break  # End of the dataset

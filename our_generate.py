@@ -2,11 +2,13 @@ import torch
 import torch.nn as nn
 import os
 import random
+import pickle
 
 from third_party.midi_processor.processor import decode_midi, encode_midi
 
 from utilities.argument_funcs import parse_generate_args, print_generate_args
 from model.music_transformer import MusicTransformer
+from model.reconstructor import Reconstructor
 from dataset.e_piano import create_epiano_datasets, compute_epiano_accuracy, process_midi
 from torch.utils.data import DataLoader
 from torch.optim import Adam
@@ -36,65 +38,53 @@ def main():
 
     os.makedirs(args.output_dir, exist_ok=True)
 
-    # Grabbing dataset if needed
-    _, _, dataset = create_epiano_datasets(args.midi_root, args.num_prime, random_seq=False)
+    style_model_path = "../results_style/weights/epoch_0048.pickle"
+    content_model_path = "../results_content/weights/epoch_0052.pickle"
 
-    # Can be None, an integer index to dataset, or a file path
-    if(args.primer_file is None):
-        f = str(random.randrange(len(dataset)))
-    else:
-        f = args.primer_file
+    style_model = MusicTransformer(n_layers=args.n_layers, num_heads=args.num_heads,
+                d_model=args.d_model, dim_feedforward=args.dim_feedforward, dropout=args.dropout,
+                feature_size=args.feature_size, max_sequence=args.max_sequence, rpr=args.rpr).to(get_device())
 
-    if(f.isdigit()):
-        idx = int(f)
-        print(dataset[idx])
-        primer, _  = dataset[idx][0]
-        primer = primer.to(get_device())
+    content_model = MusicTransformer(n_layers=args.n_layers, num_heads=args.num_heads,
+                d_model=args.d_model, dim_feedforward=args.dim_feedforward, dropout=args.dropout,
+                feature_size=args.feature_size, max_sequence=args.max_sequence, rpr=args.rpr).to(get_device())
 
-        print("Using primer index:", idx, "(", dataset.data_files[idx], ")")
+    style_model.load_state_dict(torch.load(style_model_path))
+    content_model.load_state_dict(torch.load(content_model_path))
 
-    else:
-        raw_mid = encode_midi(f)
-        if(len(raw_mid) == 0):
-            print("Error: No midi messages in primer file:", f)
-            return
-
-        primer, _  = process_midi(raw_mid, args.num_prime, random_seq=False)
-        primer = torch.tensor(primer, dtype=TORCH_LABEL_TYPE, device=get_device())
-
-        print("Using primer file:", f)
-
-    model = MusicTransformer(n_layers=args.n_layers, num_heads=args.num_heads,
-                d_model=args.d_model, dim_feedforward=args.dim_feedforward,
+    model = Reconstructor(n_layers=args.n_layers, num_heads=args.num_heads,
+                d_model=args.d_model, dim_feedforward=args.dim_feedforward, dropout=args.dropout,
                 max_sequence=args.max_sequence, rpr=args.rpr).to(get_device())
 
     print(get_device())
     model.load_state_dict(torch.load(args.model_weights, map_location=torch.device('cpu')))
 
-    # Saving primer first
-    f_path = os.path.join(args.output_dir, "primer{}.mid".format(f))
-    toks = our_encoding.id_to_event(primer[:args.num_prime].cpu().numpy())
-    print(toks)
+    file_path_content = "../dataset_3_genres_1000/val/classical/val-0.midi.pickle"
+    content_midi = torch.Tensor(pickle.load(open(file_path_content, "rb"))).int().to(get_device())
+    toks = our_encoding.id_to_event(content_midi.cpu().numpy())
+    f_path = os.path.join(args.output_dir, "output_content.mid")
     our_encoding.decode_events_to_midi(toks, f_path)
+
+    file_path_style = "../dataset_3_genres_1000/val/classical/val-0.midi.pickle"
+    style_midi = torch.Tensor(pickle.load(open(file_path_style, "rb"))).int().to(get_device())
+    toks = our_encoding.id_to_event(style_midi.cpu().numpy())
+    f_path = os.path.join(args.output_dir, "output_style.mid")
+    our_encoding.decode_events_to_midi(toks, f_path)
+
+    content_embedding = content_model(content_midi.unsqueeze(dim=0))
+    style_embedding = style_model(style_midi.unsqueeze(dim=0))
+    print(style_embedding.shape)
 
     # GENERATION
     model.eval()
     with torch.set_grad_enabled(False):
-        if(args.beam > 0):
-            print("BEAM:", args.beam)
-            beam_seq = model.generate(primer[:args.num_prime], args.target_seq_length, beam=args.beam)
-
-            f_path = os.path.join(args.output_dir, "beam.mid")
-            decode_midi(beam_seq[0].cpu().numpy(), file_path=f_path)
-        else:
-            print("RAND DIST OH!")
-            print('Primer ', primer)
-            rand_seq = model.generate(primer[:args.num_prime], args.target_seq_length, beam=0)
-            print('rL ', rand_seq.shape)
-            f_path = os.path.join(args.output_dir, "output{}.mid".format(f))
-            # decode_midi(rand_seq[0].cpu().numpy(), file_path=f_path)
-            toks = our_encoding.id_to_event(rand_seq[0].cpu().numpy())
-            our_encoding.decode_events_to_midi(toks, f_path)
+        rand_seq = model.generate(style_embedding, content_embedding, args.target_seq_length)
+        print('rL ', rand_seq.shape)
+        f_path = os.path.join(args.output_dir, "output.mid")
+        print(rand_seq)
+        # decode_midi(rand_seq[0].cpu().numpy(), file_path=f_path)
+        toks = our_encoding.id_to_event(rand_seq[0].cpu().numpy())
+        our_encoding.decode_events_to_midi(toks, f_path)
 
 
 

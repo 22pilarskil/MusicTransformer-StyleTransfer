@@ -30,6 +30,7 @@ CSV_HEADER = ["Epoch", "Learn rate", "Avg Train loss", "Avg Train acc", "Avg Eva
 # Baseline is an untrained epoch that we evaluate as a baseline loss and accuracy
 BASELINE_EPOCH = -1
 mp.set_start_method('spawn', force=True)
+start = 1
 
 # main
 def main():
@@ -62,20 +63,11 @@ def main():
     best_text = os.path.join(results_folder, "best_epochs.txt")
 
     ##### Datasets #####
-    train_dataset, val_dataset, test_dataset = create_embedding_datasets(args.input_dir)
+    train_dataset, val_dataset, test_dataset = create_embedding_datasets(args.input_dir, args.max_sequence)
 
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, num_workers=args.n_workers, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size, num_workers=args.n_workers)
     test_loader = DataLoader(test_dataset, batch_size=args.batch_size, num_workers=args.n_workers)
-
-    '''
-    feature_extractor = MusicTransformer(n_layers=args.n_layers, num_heads=args.num_heads,
-                d_model=args.d_model, dim_feedforward=args.dim_feedforward, dropout=args.dropout,
-                max_sequence=args.max_sequence, rpr=args.rpr).to(get_device())
-
-    feature_extractor.load_state_dict(torch.load(args.continue_weights))
-    embedding_loss_func = EmbeddingLoss(feature_extractor)
-    '''
 
     train_loss_func = nn.CrossEntropyLoss(ignore_index=TOKEN_PAD)
     eval_loss_func = train_loss_func
@@ -84,16 +76,8 @@ def main():
                 d_model=args.d_model, dim_feedforward=args.dim_feedforward, dropout=args.dropout,
                 max_sequence=args.max_sequence, rpr=args.rpr).to(get_device())
 
-    '''
-    def print_grad(module, grad_input, grad_output):
-        print(f"{module.__class__.__name__} - Grad Output: {grad_output}")
-    
-    for name, layer in model.named_children():
-        layer.register_backward_hook(print_grad)
-    '''
-
     ##### Continuing from previous training session #####
-    start_epoch = BASELINE_EPOCH + 1
+    start_epoch = BASELINE_EPOCH + start
 
     if(args.lr is None):
         if(args.continue_epoch is None):

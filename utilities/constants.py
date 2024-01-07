@@ -16,7 +16,8 @@ SCHEDULER_WARMUP_STEPS  = 4000
 # DROPOUT_P               = 0.1
 
 TOKEN_END               = 100 + 127 + 127 + 127
-TOKEN_PAD               = TOKEN_END + 1
+TOKEN_START             = TOKEN_END + 1
+TOKEN_PAD               = TOKEN_START + 1
 
 VOCAB_SIZE              = TOKEN_PAD + 1
 

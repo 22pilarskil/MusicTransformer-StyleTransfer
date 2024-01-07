@@ -7,7 +7,7 @@ from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
 from torch.optim import Adam
 
-from dataset.e_piano import create_embedding_datasets
+from dataset.e_piano import create_separated_datasets
 
 from model.music_transformer import MusicTransformer
 from model.loss import SmoothCrossEntropyLoss
@@ -71,7 +71,7 @@ def main():
         tensorboard_summary = SummaryWriter(log_dir=tensorboad_dir)
 
     ##### Datasets #####
-    train_dataset, test_dataset, val_dataset = create_embedding_datasets(args.input_dir, args.max_sequence)
+    train_dataset, test_dataset, val_dataset = create_separated_datasets(args.input_dir, args.max_sequence)
 
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, num_workers=args.n_workers, shuffle=True)
     test_loader = DataLoader(test_dataset, batch_size=args.batch_size, num_workers=args.n_workers)

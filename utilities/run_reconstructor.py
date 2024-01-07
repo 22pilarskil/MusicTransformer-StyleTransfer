@@ -5,6 +5,7 @@ import os
 import shutil
 import pickle
 
+from scipy import stats
 from sklearn.decomposition import PCA
 from sklearn.metrics import silhouette_score
 from sklearn.manifold import TSNE
@@ -26,6 +27,7 @@ triplet_loss_fn = torch.nn.TripletMarginLoss(margin=1.0, p=2)
 torch.autograd.set_detect_anomaly(True)
 similarity_coeff = 3.0
 std_coeff = 50.0
+limit = 1000
 
 def compute_similarity(logits1, logits2, temperature=0.01, power=2):
     probs1 = softmax(logits1 / temperature, dim=-1) ** power
@@ -54,34 +56,36 @@ def eval_reconstructor_model(model, dataloader, loss_func):
     with torch.set_grad_enabled(False):
         sum_loss   = 0.0
         sum_acc    = 0.0
-        sum_triplet_loss = 0.0
         dataloader_iter = iter(dataloader)
         while True:
             try:
+
+                time_before = time.time()
                 batch = next(dataloader_iter)
 
-                style_emb = torch.squeeze(batch[1], 0)
-                pos_emb = torch.squeeze(batch[2], 0)
-                input_sequence = torch.squeeze(batch[0])
-                if True: #with autocast():
-                    logits_encoded = torch.squeeze(model(style_emb, pos_emb))
-                    out = loss_func.forward(logits_encoded, input_sequence)
-                    output_sequence = torch.argmax(logits_encoded, dim=1)
-                    accuracy = (input_sequence == output_sequence).sum().item() / len(input_sequence)
+                x = batch[0]
+                style_embedding = batch[1]
+                content_embedding = batch[2]
+                tgt = batch[3] 
+                y = model(x, style_embedding, content_embedding)
+                y   = y.reshape(y.shape[0] * y.shape[1], -1)
+                tgt = tgt.flatten()
 
-                sum_acc += accuracy
+                out = loss_func.forward(y, tgt)
+                sum_acc += float(compute_epiano_accuracy(y, tgt))
+
                 sum_loss += float(out)
 
-
+                time_after = time.time()
+                time_took = time_after - time_before
+                
                 batch_num += 1
-                print("BATCH:", batch_num)
+                print("BATCH:", batch_num, time_took)
 
             except StopIteration:
                 break  # End of the dataset
-            except ValueError as e:
-                print(f"Skipping batch {batch_num+1} due to error: {e}")
-                continue  # Skip to the next batch
-            if batch_num == 1000: break
+
+            if batch_num == limit: break
 
         avg_loss    = sum_loss / batch_num
         avg_accuracy = sum_acc / batch_num
@@ -103,7 +107,6 @@ def train_reconstructor_epoch(cur_epoch, model, dataloader, loss_func, opt, lr_s
     out = -1
     model.train()
     batch_num = 0
-    skipped = 0
     dataloader_iter = iter(dataloader)
     print("HERE")
     while True:
@@ -114,27 +117,19 @@ def train_reconstructor_epoch(cur_epoch, model, dataloader, loss_func, opt, lr_s
 
             opt.zero_grad()
             gc.collect()
+              
+            x = batch[0]
+            style_embedding = batch[1]
+            content_embedding = batch[2]
+            tgt = batch[3] 
+            y = model(x, style_embedding, content_embedding)
 
-            style_emb = torch.squeeze(batch[1], 0)
-            pos_emb = torch.squeeze(batch[2], 0)
-            neg_style_emb = torch.squeeze(batch[3], 0)
-            input_sequence = torch.squeeze(batch[0])
-            print(style_emb.shape)
-            print(pos_emb.shape)
-            if True: # with autocast():
-                logits_encoded = torch.squeeze(model(style_emb, pos_emb))            
-                print(logits_encoded.shape)
-                out = loss_func.forward(logits_encoded, input_sequence)
+            y   = y.reshape(y.shape[0] * y.shape[1], -1)
+            tgt = tgt.flatten()
 
-            if True: # with autocast():
-                negative_logits_encoded = torch.squeeze(model(neg_style_emb, pos_emb))
+            out = loss_func.forward(y, tgt)
 
-            similarity_penalty = compute_similarity(logits_encoded, negative_logits_encoded)
-
-            total_loss = out + similarity_coeff * similarity_penalty #+ std_coeff / negative_logits_encoded.std()
-
-            scaler.scale(total_loss).backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            scaler.scale(out).backward()
             scaler.step(opt)
             scaler.update()
 
@@ -146,16 +141,15 @@ def train_reconstructor_epoch(cur_epoch, model, dataloader, loss_func, opt, lr_s
 
             print(SEPERATOR)
             print("TOTAL", float(out))
-            print("SIMILARITY", float(similarity_penalty), float(similarity_penalty * similarity_coeff))
             print("Epoch", cur_epoch, " Batch", batch_num, "/", len(dataloader))
             print("LR:", get_lr(opt))
-            print("Train loss:", float(total_loss))
+            print("Train loss:", float(out))
             print("")
-            print("SKIPPED: ", skipped)
             print("Time (s):", time_took)
             print(SEPERATOR)
             print("")
 
+            del out
 
             torch.cuda.empty_cache()
 
@@ -163,12 +157,7 @@ def train_reconstructor_epoch(cur_epoch, model, dataloader, loss_func, opt, lr_s
             print(f"EPOCH {cur_epoch} finished!")
             break  # End of the dataset
         
-        except ValueError as e:
-            print(f"Skipping batch {batch_num+1} due to error: {e}")
-            batch_num += 1
-            skipped += 1
-            continue  # Skip to the next batch
-        if batch_num == 1000: break        
+        if batch_num == limit: break        
         
 
     return
