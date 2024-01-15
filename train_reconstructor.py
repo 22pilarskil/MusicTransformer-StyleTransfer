@@ -78,6 +78,16 @@ def main():
 
     ##### Continuing from previous training session #####
     start_epoch = BASELINE_EPOCH + start
+    if (args.continue_weights is not None):
+        if (args.continue_epoch is None):
+            print("ERROR: Need epoch number to continue from (-continue_epoch) when using continue_weights")
+            return
+        else:
+            model.load_state_dict(torch.load(args.continue_weights))
+            start_epoch = args.continue_epoch
+    elif (args.continue_epoch is not None):
+        print("ERROR: Need continue weights (-continue_weights) when using continue_epoch")
+        return
 
     if(args.lr is None):
         if(args.continue_epoch is None):

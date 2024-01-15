@@ -60,49 +60,60 @@ class Reconstructor(nn.Module):
         A prediction at one index is the "next" prediction given all information seen previously.
         ----------
         """
+        seq_length = x.shape[1]
 
         if mask is True:
-            mask = self.transformer.generate_square_subsequent_mask(x.shape[1]).to(get_device())
+            mask = self.transformer.generate_square_subsequent_mask(seq_length).to(get_device())
         else:
             mask = None
 
         x = self.embedding(x)
         x = x.permute(1, 0, 2)
         x = self.positional_encoding(x)
-        
-        embeddings = torch.cat([style_embedding, content_embedding], dim=1)  # Shape: (batch_size, 512)
+
+        embeddings = torch.cat([style_embedding, content_embedding], dim=1)
         embeddings = self.linear_embeddings(embeddings)  # Shape: (batch_size, d_model)
-        embeddings = embeddings.unsqueeze(1).repeat(1, x.size(1), 1)  # Shape: (batch_size, sequence_length, d_model)
+        embeddings = embeddings.unsqueeze(1).repeat(1, seq_length, 1) # Shape: (1, batch_size, d_model)
 
         attn_output, attn_weights = self.cross_attn(query=x, key=embeddings, value=embeddings)
-        attn_output = self.cross_attn_layer_norm(attn_output + x)
+        attn_output = self.cross_attn_layer_norm(attn_output)
         x_out = self.transformer(src=attn_output, tgt=attn_output, src_mask=mask)
-        
+
+        # print("ATTN", attn_output.shape, attn_output[:2, 0, :10])
+        # raise ValueError("TEST")        
 
         # x_out = self.transformer(src=x, tgt=x, src_mask=mask)
         x_out = x_out.permute(1, 0, 2)
         y = self.Wout(x_out)
-
+        
         del mask
         return y
 
 
-    def generate(self, style_embedding, content_embedding, target_seq_length=1024):
+    def generate(self, style_embedding, content_embedding, content_midi, num_primer, target_seq_length=1000):
         assert (not self.training), "Cannot generate while in training mode"
 
         print("Generating sequence of max length:", target_seq_length)
 
         # Initialize gen_seq with TOKEN_START and the rest as TOKEN_PAD
         gen_seq = torch.full((1, target_seq_length), TOKEN_PAD, dtype=TORCH_LABEL_TYPE, device=get_device())
+        gen_seq[..., :num_primer] = content_midi[..., :num_primer]
+        print(content_midi[..., :num_primer].shape)
         gen_seq[..., 0] = TOKEN_START
-
-        cur_i = 1  # Start from index 1 as the first token is TOKEN_START
+        print("GEN", gen_seq.shape)
+        cur_i = num_primer  # Start from index 1 as the first token is TOKEN_START
         while(cur_i < target_seq_length):
-            y = self.softmax(self.forward(gen_seq[..., :cur_i], style_embedding, content_embedding))[..., :(TOKEN_END + 1)]
+            y = self.softmax(self.forward(gen_seq, style_embedding, content_embedding, mask=False))[..., :(TOKEN_END + 1)]
+            y   = y.reshape(y.shape[0] * y.shape[1], -1)
+            print(torch.argmax(y, dim=-1))
+            raise ValueError()
             token_probs = y[:, cur_i-1, :]
-            print(gen_seq[:100])
             # Select the argmax of the logits
             next_token = torch.argmax(token_probs, dim=-1)
+            
+            #distrib = torch.distributions.categorical.Categorical(probs=token_probs)
+            #next_token = distrib.sample()
+
             gen_seq[:, cur_i] = next_token
 
             # Check for the end of sequence token
@@ -116,6 +127,18 @@ class Reconstructor(nn.Module):
 
         return gen_seq[:, :cur_i]
 
+
+    def generate_one_shot(self, style_embedding, content_embedding, content_midi, mask=True):
+        assert (not self.training), "Cannot generate while in training mode"
+        print(content_midi.shape)
+        content_midi = content_midi.unsqueeze(dim=0)
+        print(content_midi.shape)
+        y = self.softmax(self.forward(content_midi, style_embedding, content_embedding, mask=mask))[..., :(TOKEN_END + 1)]
+        print(y.shape)
+        tokens = torch.argmax(y, dim=-1)
+        return tokens
+        print(tokens.shape)
+        raise ValueError()
 
 
 # Used as a dummy to nn.Transformer

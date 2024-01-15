@@ -1,7 +1,7 @@
 #!/bin/sh
 
 output_dir="../test_generate"
-weights_dir="../results_embeddings/weights/epoch_0013.pickle"
+weights_dir="../test_double_masking_varied_length/weights/epoch_0043.pickle"
 max_sequence=1000
 
 python3 our_generate.py \
@@ -10,4 +10,5 @@ python3 our_generate.py \
 -model_weights $weights_dir \
 -max_sequence $max_sequence \
 -feature_size 128 \
+-dropout 0 \
 --rpr \

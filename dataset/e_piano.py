@@ -4,6 +4,7 @@ import random
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset
+from torch.nn.functional import pad
 
 from utilities.constants import *
 from utilities.device import cpu_device
@@ -159,14 +160,19 @@ class EmbeddingDataset(Dataset):
         i_stream.close()
         style_embedding = style_embedding.squeeze(dim=0)
         content_embedding = content_embedding.squeeze(dim=0)
-        x = x.squeeze(dim=0)
-        tgt = tgt.squeeze(dim=0)
+
+        random_length = 1000 #random.randint(1, self.max_seq)
+        x = x.squeeze(dim=0)[:random_length]
+        tgt = tgt.squeeze(dim=0)[:random_length]
 
         x[0] = TOKEN_START
         tgt[-1] = TOKEN_END
 
-        return x, style_embedding, content_embedding, tgt
+        padding_size = self.max_seq - random_length
+        x = pad(x, (0, padding_size), value=TOKEN_PAD)
+        tgt = pad(tgt, (0, padding_size), value=TOKEN_PAD)
 
+        return x, style_embedding, content_embedding, tgt
 
 
 class EPianoDataset(Dataset):

@@ -126,7 +126,12 @@ def train_reconstructor_epoch(cur_epoch, model, dataloader, loss_func, opt, lr_s
 
             y   = y.reshape(y.shape[0] * y.shape[1], -1)
             tgt = tgt.flatten()
-
+            print(torch.argmax(y, dim=-1))
+            print(torch.argmax(y, dim=-1).shape)
+            print(y.shape)
+            print(x.shape)
+            print(style_embedding.shape)
+            print(content_embedding.shape)
             out = loss_func.forward(y, tgt)
 
             scaler.scale(out).backward()

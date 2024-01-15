@@ -26,7 +26,7 @@ TRIPLET_MARGIN = 1.0
 triplet_loss_fn = torch.nn.TripletMarginLoss(margin=TRIPLET_MARGIN, p=2)
 CONTRASTIVE_MARGIN = 1.0
 torch.autograd.set_detect_anomaly(True)
-limit = 1000
+limit = 10000
 return_all = True
 
 
