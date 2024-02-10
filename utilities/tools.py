@@ -2,7 +2,7 @@ import torch
 
 
 def compute_triplet_distances(embeddings, labels, margin, return_all=False):
-    triplet_indices = create_triplet_mask_new(labels)
+    triplet_indices = create_triplet_mask(labels)
     anchor_embeddings = embeddings[triplet_indices[:, 0]]
     positive_embeddings = embeddings[triplet_indices[:, 1]]
     negative_embeddings = embeddings[triplet_indices[:, 2]]
@@ -28,21 +28,12 @@ def compute_triplet_distances(embeddings, labels, margin, return_all=False):
 
 
 def create_triplet_mask(labels):
-    labels = labels.unsqueeze(1)  # Shape: (batch_size, 1)
-    mask_anchor_positive = labels == labels.T  # Anchor and Positive of
-    mask_anchor_negative = labels != labels.T  # Anchor and Negative of
-
-    valid_triplets = mask_anchor_positive.unsqueeze(2) & mask_anchor_negative.unsqueeze(1)
-    valid_triplet_indices = valid_triplets.nonzero(as_tuple=False)
-    valid_triplet_indices = valid_triplet_indices[valid_triplet_indices[:, 0] != valid_triplet_indices[:, 1]]
-    return valid_triplet_indices
-
-
-def create_triplet_mask_new(labels):
     # Initialize empty mask
     num_labels = len(labels)
     valid_triplets = torch.zeros((num_labels, num_labels, num_labels), dtype=torch.bool)
-
+    print(valid_triplets.shape)
+    print(labels)
+    print(len(labels))
     for i in range(num_labels):
         for j in range(num_labels):
             if i == j:
@@ -53,6 +44,25 @@ def create_triplet_mask_new(labels):
                 # Mark as valid if i and j share at least one label, but k has no overlap with i
                 if not set(labels[i].numpy()).isdisjoint(set(labels[j].numpy())) and set(labels[i].numpy()).isdisjoint(set(labels[k].numpy())):
                     valid_triplets[i, j, k] = True
+                    print(labels[i], labels[j], labels[k], "\n")
+    valid_triplets = valid_triplets.nonzero(as_tuple=False)
+    print(valid_triplets.shape)
+    raise ValueError()
+    return valid_triplets
 
-    return valid_triplets.nonzero(as_tuple=False)
 
+
+def compute_average_pairwise_distances(y_melody, y_harmony, y_combined):
+    # Calculate pairwise distances between y_harmony & y_combined
+    distances_harmony_combined = torch.norm(y_harmony - y_combined, p=2, dim=1)
+    # Calculate pairwise distances between y_melody & y_combined
+    distances_melody_combined = torch.norm(y_melody - y_combined, p=2, dim=1)
+    # Calculate pairwise distance between y_melody & y_harmony
+    distances_melody_harmony = torch.norm(y_melody - y_harmony, p=2, dim=1)
+
+    # Calculate the average distance for each pair
+    average_distance_harmony_combined = torch.mean(distances_harmony_combined).item()
+    average_distance_melody_combined = torch.mean(distances_melody_combined).item()
+    average_distance_melody_harmony = torch.mean(distances_melody_harmony).item()
+
+    return average_distance_melody_harmony, average_distance_melody_combined, average_distance_harmony_combined

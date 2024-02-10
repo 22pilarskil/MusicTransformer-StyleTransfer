@@ -18,8 +18,8 @@ from utilities.lr_scheduling import LrStepTracker, get_lr
 from utilities.argument_funcs import parse_train_args, print_train_args, write_model_params
 from utilities.run_model import train_epoch_content, eval_model_content
 
-CSV_HEADER = ["Epoch", "Learn rate", "Avg Train loss", "Train Accuracy", "Train TL", "Avg Eval loss", "Eval accuracy",
-              "Eval TL"]
+CSV_HEADER = ["Epoch", "Learn rate", "train_melody_harmony", "train_melody_combined", "train_harmony_combined", "eval_melody_harmony", "eval_melody_combined",
+              "eval_harmony_combined"]
 
 start = 0
 # Baseline is an untrained epoch that we evaluate as a baseline loss and accuracy
@@ -166,54 +166,24 @@ def main():
             print("Baseline model evaluation (Epoch 0):")
 
         # Eval
-        train_loss, train_acc, train_triplet_loss = eval_model_content(model, train_loader, train_loss_func,
+        train_melody_harmony, train_melody_combined, train_harmony_combined = eval_model_content(model, train_loader, train_loss_func,
                                                                      args.feature_size)
-        eval_loss, eval_acc, eval_triplet_loss = eval_model_content(model, test_loader, eval_loss_func,
+        eval_melody_harmony, eval_melody_combined, eval_harmony_combined = eval_model_content(model, test_loader, eval_loss_func,
                                                                   args.feature_size)
 
         # Learn rate
         lr = get_lr(opt)
 
         print("Epoch:", epoch + 1)
-        print("Avg train loss:", train_loss)
-        print("Avg train acc:", train_acc)
-        print("Avg train tl:", train_triplet_loss)
-        print("Avg eval loss:", eval_loss)
-        print("Avg eval acc:", eval_acc)
-        print("Avg eval tl:", eval_triplet_loss)
+        print("Avg train_melody_harmony:", train_melody_harmony)
+        print("Avg train_melody_combined:", train_melody_combined)
+        print("Avg train_harmony_combined:", train_harmony_combined)
+        print("Avg eval_melody_harmony:", eval_melody_harmony)
+        print("Avg eval_melody_combined:", eval_melody_combined)
+        print("Avg eval_harmony_combined:", eval_harmony_combined)
         print(SEPERATOR)
         print("")
 
-        new_best = False
-
-        if (eval_acc > best_eval_acc):
-            best_eval_acc = eval_acc
-            best_eval_acc_epoch = epoch + 1
-            torch.save(model.state_dict(), best_acc_file)
-            new_best = True
-
-        if (eval_loss < best_eval_loss):
-            best_eval_loss = eval_loss
-            best_eval_loss_epoch = epoch + 1
-            torch.save(model.state_dict(), best_loss_file)
-            new_best = True
-
-        # Writing out new bests
-        if (new_best):
-            with open(best_text, "w") as o_stream:
-                print("Best eval acc epoch:", best_eval_acc_epoch, file=o_stream)
-                print("Best eval acc:", best_eval_acc, file=o_stream)
-                print("")
-                print("Best eval loss epoch:", best_eval_loss_epoch, file=o_stream)
-                print("Best eval loss:", best_eval_loss, file=o_stream)
-
-        if (not args.no_tensorboard):
-            tensorboard_summary.add_scalar("Avg_CE_loss/train", train_loss, global_step=epoch + 1)
-            tensorboard_summary.add_scalar("Avg_CE_loss/eval", eval_loss, global_step=epoch + 1)
-            tensorboard_summary.add_scalar("Accuracy/train", train_acc, global_step=epoch + 1)
-            tensorboard_summary.add_scalar("Accuracy/eval", eval_acc, global_step=epoch + 1)
-            tensorboard_summary.add_scalar("Learn_rate/train", lr, global_step=epoch + 1)
-            tensorboard_summary.flush()
 
         if ((epoch + 1) % args.weight_modulus == 0):
             epoch_str = str(epoch + 1).zfill(PREPEND_ZEROS_WIDTH)
@@ -223,7 +193,7 @@ def main():
         with open(results_file, "a", newline="") as o_stream:
             writer = csv.writer(o_stream)
             writer.writerow(
-                [epoch + 1, lr, train_loss, train_acc, train_triplet_loss, eval_loss, eval_acc, eval_triplet_loss])
+                [epoch + 1, lr, train_melody_harmony, train_melody_combined, train_harmony_combined, eval_melody_harmony, eval_melody_combined, eval_harmony_combined])
 
     # Sanity check just to make sure everything is gone
     if (not args.no_tensorboard):

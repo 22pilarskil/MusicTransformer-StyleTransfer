@@ -27,3 +27,7 @@ TORCH_INT               = torch.int32
 TORCH_LABEL_TYPE        = torch.long
 
 PREPEND_ZEROS_WIDTH     = 4
+
+print("TOKEN PAD", TOKEN_PAD)
+print("TOKEN END", TOKEN_END)
+print("TOKEN START", TOKEN_START)

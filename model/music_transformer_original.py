@@ -1,6 +1,5 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from torch.nn.modules.normalization import LayerNorm
 import random
 
@@ -30,7 +29,7 @@ class MusicTransformer(nn.Module):
     """
 
     def __init__(self, n_layers=6, num_heads=8, d_model=512, dim_feedforward=1024,
-                 dropout=0.1, max_sequence=1000, rpr=False, style_layer=5, feature_size=0, reduction_factor=4, transition_features=64):
+                 dropout=0.1, max_sequence=2048, rpr=False):
         super(MusicTransformer, self).__init__()
 
         self.dummy      = DummyDecoder()
@@ -42,34 +41,36 @@ class MusicTransformer(nn.Module):
         self.dropout    = dropout
         self.max_seq    = max_sequence
         self.rpr        = rpr
-        self.style_layer = style_layer
-        self.feature_size = feature_size
-        self.reduction_factor = reduction_factor
-        self.transition_features = transition_features
-        
-        adjusted_vocab_size = VOCAB_SIZE # Account for added start token
+
         # Input embedding
-        self.embedding = nn.Embedding(adjusted_vocab_size, self.d_model)
+        self.embedding = nn.Embedding(VOCAB_SIZE, self.d_model)
 
         # Positional encoding
         self.positional_encoding = PositionalEncoding(self.d_model, self.dropout, self.max_seq)
 
-        encoder_norm = LayerNorm(self.d_model)
-        encoder_layer = TransformerEncoderLayerRPR(self.d_model, self.nhead, self.d_ff, self.dropout, er_len=self.max_seq)
-        encoder = TransformerEncoderRPR(encoder_layer, self.nlayers, encoder_norm)
+        # Base transformer
+        if(not self.rpr):
+            # To make a decoder-only transformer we need to use masked encoder layers
+            # Dummy decoder to essentially just return the encoder output
+            self.transformer = nn.Transformer(
+                d_model=self.d_model, nhead=self.nhead, num_encoder_layers=self.nlayers,
+                num_decoder_layers=0, dropout=self.dropout, # activation=self.ff_activ,
+                dim_feedforward=self.d_ff, custom_decoder=self.dummy
+            )
+        # RPR Transformer
+        else:
+            encoder_norm = LayerNorm(self.d_model)
+            encoder_layer = TransformerEncoderLayerRPR(self.d_model, self.nhead, self.d_ff, self.dropout, er_len=self.max_seq)
+            encoder = TransformerEncoderRPR(encoder_layer, self.nlayers, encoder_norm)
+            self.transformer = nn.Transformer(
+                d_model=self.d_model, nhead=self.nhead, num_encoder_layers=self.nlayers,
+                num_decoder_layers=0, dropout=self.dropout, # activation=self.ff_activ,
+                dim_feedforward=self.d_ff, custom_decoder=self.dummy, custom_encoder=encoder
+            )
 
-        self.transformer = nn.Transformer(
-            d_model=self.d_model, nhead=self.nhead, num_encoder_layers=self.nlayers,
-            num_decoder_layers=0, dropout=self.dropout, # activation=self.ff_activ,
-            dim_feedforward=self.d_ff, custom_decoder=self.dummy, custom_encoder=encoder
-        )
-
-        self.flatten = nn.Flatten()
-        self.linear = nn.Linear(in_features=512, out_features=self.reduction_factor)
-        self.conv1d = nn.Conv1d(in_channels=self.reduction_factor, out_channels=self.transition_features, kernel_size=3, stride=1, padding=1)
-        
-        self.Wout = nn.Linear(in_features=self.transition_features * self.max_seq, out_features=self.feature_size)
-
+        # Final output is a softmaxed linear layer
+        self.Wout       = nn.Linear(self.d_model, VOCAB_SIZE)
+        self.softmax    = nn.Softmax(dim=-1)
 
     # forward
     def forward(self, x, mask=True):
@@ -87,28 +88,26 @@ class MusicTransformer(nn.Module):
             mask = self.transformer.generate_square_subsequent_mask(x.shape[1]).to(get_device())
         else:
             mask = None
+
         x = self.embedding(x)
+
         # Input shape is (max_seq, batch_size, d_model)
         x = x.permute(1,0,2)
 
-        positional_embedding = self.positional_encoding(x)
+        x = self.positional_encoding(x)
+
         # Since there are no true decoder layers, the tgt is unused
         # Pytorch wants src and tgt to have some equal dims however
-        x_out = self.transformer(src=positional_embedding, tgt=positional_embedding, src_mask=mask)
+        x_out = self.transformer(src=x, tgt=x, src_mask=mask)
+
+        # Back to (batch_size, max_seq, d_model)
         x_out = x_out.permute(1,0,2)
 
-        x = self.linear(x_out)
-        x = nn.ReLU()(x)
-        x = x.permute(0, 2, 1)
-        x = self.conv1d(x)
-        x = nn.ReLU()(x)
-        x = self.flatten(x)
-        x = nn.ReLU()(x)
+        y = self.Wout(x_out)
+        # y = self.softmax(y)
 
-        y = self.Wout(x)
-        if not self.feature_size:
-            y = y + 1e-5
         del mask
+
         # They are trained to predict the next note in sequence (we don't need the last one)
         return y
 
@@ -138,8 +137,7 @@ class MusicTransformer(nn.Module):
         cur_i = num_primer
         while(cur_i < target_seq_length):
             # gen_seq_batch     = gen_seq.clone()
-            y, style_embedding = self.forward(gen_seq[..., :cur_i])
-            y = self.softmax(y)[..., :TOKEN_END]
+            y = self.softmax(self.forward(gen_seq[..., :cur_i]))[..., :TOKEN_END]
             token_probs = y[:, cur_i-1, :]
 
             if(beam == 0):
@@ -190,7 +188,7 @@ class DummyDecoder(nn.Module):
     def __init__(self):
         super(DummyDecoder, self).__init__()
 
-    def forward(self, tgt, memory, tgt_mask, memory_mask,tgt_key_padding_mask,memory_key_padding_mask,tgt_is_causal, memory_is_causal):
+    def forward(self, tgt, memory, tgt_mask, memory_mask,tgt_key_padding_mask,memory_key_padding_mask, tgt_is_causal=False,memory_is_causal=False):
         """
         ----------
         Author: Damon Gwinn
@@ -200,22 +198,3 @@ class DummyDecoder(nn.Module):
         """
 
         return memory
-
-
-class EmbeddingFromLogits(nn.Module):
-    def __init__(self, n_classes, d_model):
-        super(EmbeddingFromLogits, self).__init__()
-        self.embedding_layer = nn.Embedding(n_classes, d_model)
-        self.n_classes = n_classes
-
-    def forward(self, logits):
-        # Softmax probabilities
-        softmax_probs = F.softmax(logits, dim=-1)
-
-        # Get embeddings for all classes
-        all_embeddings = self.embedding_layer.weight
-
-        # Weight embeddings by softmax probabilities and sum
-        weighted_embeddings = torch.matmul(softmax_probs, all_embeddings)
-
-        return weighted_embeddings

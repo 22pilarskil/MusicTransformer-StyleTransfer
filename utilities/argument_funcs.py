@@ -232,6 +232,13 @@ def write_model_params(args, output_file):
     o_stream.close()
 
 
+def add_generation(parser):
+    parser.add_argument("-content_genre", type=str, default="jazz")
+    parser.add_argument("-style_genre", type=str, default="jazz")
+    parser.add_argument("-content_index", type=int, default=0)
+    parser.add_argument("-style_index", type=int, default=0)
+    parser.add_argument("-primer_length", type=int, default=250)
+
 def parse_train_reconstruction_args():
     """
     ----------
@@ -270,6 +277,8 @@ def parse_train_reconstruction_args():
     parser.add_argument("-dim_feedforward", type=int, default=1024, help="Dimension of the feedforward layer")
 
     parser.add_argument("-dropout", type=float, default=0.1, help="Dropout rate")
+
+    add_generation(parser)
 
     return parser.parse_args()
 

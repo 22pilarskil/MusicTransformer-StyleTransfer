@@ -11,7 +11,7 @@ import torch.multiprocessing as mp
 
 from dataset.e_piano import create_embedding_datasets, create_epiano_datasets, compute_epiano_accuracy
 
-from model.music_transformer import MusicTransformer
+from model.music_transformer_original import MusicTransformer
 from model.reconstructor import Reconstructor
 from model.loss import SmoothCrossEntropyLoss
 from embedding_loss import EmbeddingLoss 
@@ -20,7 +20,7 @@ from utilities.constants import *
 from utilities.device import get_device, use_cuda
 from utilities.lr_scheduling import LrStepTracker, get_lr
 from utilities.argument_funcs import parse_train_reconstruction_args, print_train_reconstruction_args, write_model_params
-from utilities.run_reconstructor import train_reconstructor_epoch, eval_reconstructor_model
+from utilities.run_original import train_original_epoch, eval_original_model
 
 from torch.cuda.amp import GradScaler, autocast
 scaler = GradScaler()
@@ -72,7 +72,7 @@ def main():
     train_loss_func = nn.CrossEntropyLoss(ignore_index=TOKEN_PAD)
     eval_loss_func = train_loss_func
 
-    model = Reconstructor(n_layers=args.n_layers, num_heads=args.num_heads,
+    model = MusicTransformer(n_layers=args.n_layers, num_heads=args.num_heads,
                 d_model=args.d_model, dim_feedforward=args.dim_feedforward, dropout=args.dropout,
                 max_sequence=args.max_sequence, rpr=args.rpr).to(get_device())
 
@@ -101,9 +101,6 @@ def main():
         lr = args.lr
 
 
-    #print(model.linear_embeddings.weight)
-    #print(model.linear_embeddings.weight.shape)
-    #raise ValueError()
     ##### Optimizer #####
     opt = Adam(model.parameters(), lr=lr, betas=(ADAM_BETA_1, ADAM_BETA_2), eps=ADAM_EPSILON)
 
@@ -135,7 +132,7 @@ def main():
             print("")
 
             # Train
-            train_reconstructor_epoch(epoch+1, model, train_loader, train_loss_func, opt, lr_scheduler)
+            train_original_epoch(epoch+1, model, train_loader, train_loss_func, opt, lr_scheduler)
 
             print(SEPERATOR)
             print("Evaluating:")
@@ -144,8 +141,8 @@ def main():
             print("Baseline model evaluation (Epoch 0):")
 
         # Eval
-        train_loss, train_acc = eval_reconstructor_model(model, train_loader, train_loss_func)
-        eval_loss, eval_acc = eval_reconstructor_model(model, test_loader, eval_loss_func)
+        train_loss, train_acc = eval_original_model(model, train_loader, train_loss_func)
+        eval_loss, eval_acc = eval_original_model(model, test_loader, eval_loss_func)
 
         # Learn rate
         lr = get_lr(opt)

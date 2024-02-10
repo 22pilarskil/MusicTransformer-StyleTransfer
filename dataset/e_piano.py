@@ -57,10 +57,22 @@ class RandomizedBatching(Dataset):
         raw_data = torch.tensor(raw_data, dtype=TORCH_LABEL_TYPE, device=cpu_device())
         # Assuming process_midi is a function to process your midi data
         x, tgt = process_midi(raw_data, self.max_seq)
-        crop = random.randint(0, 250)
-        buffer = torch.Tensor([TOKEN_END for i in range(crop)]).int()
-        x, tgt = torch.cat((x[crop:], buffer)), torch.cat((tgt[crop:], buffer))
+
+        random_length = random.randint(self.max_seq / 4, self.max_seq)
+        x = x.squeeze(dim=0)[:random_length]
+        tgt = tgt.squeeze(dim=0)[:random_length]
+        x[0] = TOKEN_START
+        tgt[-1] = TOKEN_END
+
+        padding_size = self.max_seq - random_length
+        x = pad(x, (0, padding_size), value=TOKEN_PAD)
+        tgt = pad(tgt, (0, padding_size), value=TOKEN_PAD)
+
         return [x, tgt]
+#        rhythm = x.copy()
+#        condition = (x < 0) | ((x > 99) & (x < 481)) | (x > 483)
+#        rhythm[condition] = 100
+#        return [x, tgt, rhythm]
 
 
 # EPianoDataset
@@ -112,6 +124,17 @@ class TripletSelector(Dataset):
         raw_data = torch.tensor(raw_data, dtype=TORCH_LABEL_TYPE, device=cpu_device())
         # Assuming process_midi is a function to process your midi data
         x, tgt = process_midi(raw_data, self.max_seq)
+        
+        random_length = random.randint(self.max_seq / 4, self.max_seq)
+        x = x.squeeze(dim=0)[:random_length]
+        tgt = tgt.squeeze(dim=0)[:random_length]
+        x[0] = TOKEN_START
+        tgt[-1] = TOKEN_END
+
+        padding_size = self.max_seq - random_length
+        x = pad(x, (0, padding_size), value=TOKEN_PAD)
+        tgt = pad(tgt, (0, padding_size), value=TOKEN_PAD)
+        
         return [x, tgt]
 
 
@@ -153,7 +176,7 @@ class EmbeddingDataset(Dataset):
         return len(self.data_files)
 
     def __getitem__(self, idx):
-        idx = random.randint(0, len(self.data_files) - 1)
+        # idx = random.randint(0, len(self.data_files) - 1)
         i_stream = open(self.data_files[idx], "rb")
         raw_data = pickle.load(i_stream)
         x, style_embedding, content_embedding, tgt = raw_data

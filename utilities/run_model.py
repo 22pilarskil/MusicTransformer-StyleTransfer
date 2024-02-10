@@ -18,7 +18,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.cuda.amp import GradScaler, autocast
 
-from .tools import compute_triplet_distances
+from .tools import compute_triplet_distances, compute_average_pairwise_distances
 
 scaler = GradScaler()
 
@@ -26,70 +26,8 @@ TRIPLET_MARGIN = 1.0
 triplet_loss_fn = torch.nn.TripletMarginLoss(margin=TRIPLET_MARGIN, p=2)
 CONTRASTIVE_MARGIN = 1.0
 torch.autograd.set_detect_anomaly(True)
-limit = 10000
+limit = 1000
 return_all = True
-
-
-def average_pairwise_distance(batch):
-    batch_size = batch.shape[0]
-    total_distance = 0.0
-    num_pairs = 0
-
-    # Iterate over each element in the batch
-    for i in range(batch_size):
-        for j in range(i + 1, batch_size):
-            # Compute Euclidean distance between elements i and j
-            distance = F.pairwise_distance(batch[i].unsqueeze(0), batch[j].unsqueeze(0))
-            total_distance += distance.item()
-            num_pairs += 1
-
-    # Average distance
-    average_distance = total_distance / num_pairs
-    return average_distance
-
-
-def average_pairwise_distance_across_batches(batches):
-    num_batches = len(batches)
-    batch_size = batches[0].shape[0]
-    similarity = 0.0
-    num_similarity = 0
-    difference = 0.0
-    num_difference = 0
-    sum_melody_similarity = 0.0
-
-    for i in range(batch_size):
-        for batch_idx1 in range(num_batches):
-            difference += average_pairwise_distance(batches[batch_idx1])
-            num_difference += 1
-        melody_similarity = F.pairwise_distance(batches[0][i].unsqueeze(0), batches[2][i].unsqueeze(0)).item()
-        sum_melody_similarity += melody_similarity
-        similarity += melody_similarity
-        similarity += F.pairwise_distance(batches[1][i].unsqueeze(0), batches[2][i].unsqueeze(0)).item()
-        num_similarity += 2
-
-    avg_difference = difference / num_difference
-    avg_similarity = similarity / num_similarity
-    avg_melody_similarity = similarity / (num_similarity / 2)
-    return avg_difference, avg_similarity, avg_melody_similarity
-
-
-class ContrastiveLoss(nn.Module):
-    def __init__(self, margin=1.0):
-        super(ContrastiveLoss, self).__init__()
-        self.margin = margin
-
-    def forward(self, output1, output2, label):
-        euclidean_distance = F.pairwise_distance(output1, output2)
-        loss_contrastive = torch.mean((1-label) * torch.pow(euclidean_distance, 2) +
-                                      (label) * torch.pow(torch.clamp(self.margin - euclidean_distance, min=0.0), 2))
-        return loss_contrastive
-
-use_triplet = True
-cosine_loss = True
-if cosine_loss:
-    contrastive_loss_fn = nn.CosineEmbeddingLoss(margin=CONTRASTIVE_MARGIN)  
-else:
-    contrastive_loss_fn = ContrastiveLoss(margin=CONTRASTIVE_MARGIN)
 
 # train_epoch
 
@@ -114,17 +52,14 @@ def train_epoch_style(cur_epoch, model, dataloader, loss, opt, lr_scheduler=None
                 x = sample[0].to(get_device())
                 tgt = sample[1].to(get_device())
 
-               
                 y = model(x)
-                print(y.shape)
                 labels.append(label)
                 style_embeddings.append(y.to('cpu'))
 
             style_embeddings = [j.reshape(1, feature_size) for i in style_embeddings for j in i]
-            print(len(style_embeddings))
-            print(style_embeddings[0].shape)
             labels = [j.to("cpu").unsqueeze(dim=-1) for i in labels for j in i]
             embeddings = torch.cat(style_embeddings, dim=0)
+            print("LABELS", len(labels), len(style_embeddings))
 
             top_hard_triplets = compute_triplet_distances(embeddings, labels, TRIPLET_MARGIN, return_all=return_all)
 
@@ -133,7 +68,6 @@ def train_epoch_style(cur_epoch, model, dataloader, loss, opt, lr_scheduler=None
             top_negative_embeddings = embeddings[top_hard_triplets[:, 2]]
 
             triplet_loss = triplet_loss_fn(top_anchor_embeddings, top_positive_embeddings, top_negative_embeddings)
-            print(triplet_loss)
             combined_loss = triplet_loss.to("cuda:0")
 
             scaler.scale(combined_loss).backward()
@@ -192,49 +126,31 @@ def train_epoch_content(cur_epoch, model, dataloader, loss, opt, lr_scheduler=No
             y_melody = model(batch[0].to(get_device())).to("cpu")
             y_harmony = model(batch[1].to(get_device())).to("cpu")
             y_combined = model(batch[2].to(get_device())).to("cpu")
-            
-            batch_size = dataloader.batch_size
+
+            split_melody = [y_melody[i].unsqueeze(0) for i in range(y_melody.size(0))]
+            split_harmony = [y_harmony[i].unsqueeze(0) for i in range(y_harmony.size(0))]
+            split_combined = [y_combined[i].unsqueeze(0) for i in range(y_combined.size(0))]
+
+            content_embeddings = split_melody + split_harmony + split_combined
+            embeddings = torch.cat(content_embeddings, dim=0)
+
+            batch_size = y_melody.size(0)
             labels = []
 
             labels.extend([torch.Tensor([2 * i]).to("cpu").int() for i in range(batch_size)])
             labels.extend([torch.Tensor([2 * i + 1]).to("cpu").int() for i in range(batch_size)])
             labels.extend([torch.Tensor([2 * i, 2 * i + 1]).to("cpu").int() for i in range(batch_size)])
 
-            if not use_triplet:
+            print("LABELS", len(labels), len(content_embeddings))
 
-                if cosine_loss:
-                    label_similar = torch.tensor([1], dtype=torch.float32)
-                    label_different = torch.tensor([-1], dtype=torch.float32)
-                else:
-                    label_similar = torch.tensor([0])
-                    label_different = torch.tensor([1])
- 
-                loss_melody_combined = contrastive_loss_fn(y_melody, y_combined, label_similar)
-                loss_harmony_combined = contrastive_loss_fn(y_harmony, y_combined, label_similar)
-                loss_melody_harmony = contrastive_loss_fn(y_melody, y_harmony, label_different)
+            top_hard_triplets = compute_triplet_distances(embeddings, labels, TRIPLET_MARGIN, return_all=return_all)
 
+            top_anchor_embeddings = embeddings[top_hard_triplets[:, 0]]
+            top_positive_embeddings = embeddings[top_hard_triplets[:, 1]]
+            top_negative_embeddings = embeddings[top_hard_triplets[:, 2]]
 
-                combined_loss = (loss_melody_combined / 2 + loss_harmony_combined / 2 + loss_melody_harmony * 2).to(get_device())
-            
-            else:
-
-                labels = []
-
-                labels.extend([torch.Tensor([i]).to("cpu").int() for i in range(batch_size)])
-                labels.extend([torch.Tensor([i]).to("cpu").int() for i in range(batch_size)])
-
-                content_embeddings = [y_melody, y_combined]
-                content_embeddings = [j.reshape(1, feature_size) for i in content_embeddings for j in i]
-                embeddings = torch.cat(content_embeddings, dim=0)
-
-                top_hard_triplets = compute_triplet_distances(embeddings, labels, TRIPLET_MARGIN, return_all=True)
-
-                top_anchor_embeddings = embeddings[top_hard_triplets[:, 0]]
-                top_positive_embeddings = embeddings[top_hard_triplets[:, 1]]
-                top_negative_embeddings = embeddings[top_hard_triplets[:, 2]]
-
-                triplet_loss = triplet_loss_fn(top_anchor_embeddings, top_positive_embeddings, top_negative_embeddings)
-                combined_loss = triplet_loss.to("cuda:0")
+            triplet_loss = triplet_loss_fn(top_anchor_embeddings, top_positive_embeddings, top_negative_embeddings)
+            combined_loss = triplet_loss.to("cuda:0")
 
 
             scaler.scale(combined_loss).backward()
@@ -338,9 +254,9 @@ def eval_model_content(model, dataloader, loss, feature_size=0):
         sum_loss   = []
         sum_acc    = 0.0
         sum_combined_loss = 0.0
-        sum_similarity = 0.0
-        sum_difference = 0.0
-        sum_melody_similarity = 0.0
+        sum_melody_harmony = 0.0
+        sum_melody_combined = 0.0
+        sum_harmony_combined = 0.0
         dataloader_iter = iter(dataloader)
         while True:
             try:
@@ -350,26 +266,25 @@ def eval_model_content(model, dataloader, loss, feature_size=0):
                 y_harmony = model(batch[1].to(get_device())).to("cpu")
                 y_combined = model(batch[2].to(get_device())).to("cpu")
 
-                batches = [y_melody, y_harmony, y_combined]
-
-                difference, similarity, melody_similarity = average_pairwise_distance_across_batches(batches)
+                melody_harmony, melody_combined, harmony_combined = compute_average_pairwise_distances(y_melody, y_harmony, y_combined)
         
-                sum_similarity += similarity
-                sum_melody_similarity += melody_similarity
-                sum_difference += difference
+                sum_melody_harmony += melody_harmony
+                sum_melody_combined += melody_combined
+                sum_harmony_combined += harmony_combined
         
                 batch_num += 1
-                print("BATCH_NUM", batch_num, round(float(difference), 3), round(float(similarity), 3), round(float(melody_similarity), 3))
+                print("BATCH_NUM", batch_num, round(float(melody_harmony), 3), round(float(melody_combined), 3), round(float(harmony_combined), 3))
                 if batch_num > limit:
                     print("BREAKING")
                     break
 
             except StopIteration:
                 break  # End of the dataset
-        avg_similarity = sum_similarity / batch_num
-        avg_difference = sum_difference / batch_num
-        avg_melody_similarity = sum_melody_similarity / batch_num
-        return avg_melody_similarity, avg_similarity, avg_difference
+
+        avg_melody_harmony = sum_melody_harmony / batch_num
+        avg_melody_combined = sum_melody_combined / batch_num
+        avg_harmony_combined = sum_harmony_combined / batch_num
+        return avg_melody_harmony, avg_melody_combined, avg_harmony_combined
 
 
 def eval_triplets(model, dataloader, iterations=40, file_path="style_embeddings_clusters.png"):
