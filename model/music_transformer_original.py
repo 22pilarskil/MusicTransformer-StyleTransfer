@@ -107,7 +107,7 @@ class MusicTransformer(nn.Module):
         # y = self.softmax(y)
 
         del mask
-
+        print("OUT", y.shape)
         # They are trained to predict the next note in sequence (we don't need the last one)
         return y
 

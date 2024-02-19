@@ -238,6 +238,7 @@ def add_generation(parser):
     parser.add_argument("-content_index", type=int, default=0)
     parser.add_argument("-style_index", type=int, default=0)
     parser.add_argument("-primer_length", type=int, default=250)
+    parser.add_argument("-random", type=int, default=0)
 
 def parse_train_reconstruction_args():
     """

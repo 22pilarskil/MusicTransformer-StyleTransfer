@@ -25,7 +25,7 @@ from utilities.run_reconstructor import train_reconstructor_epoch, eval_reconstr
 from torch.cuda.amp import GradScaler, autocast
 scaler = GradScaler()
 
-CSV_HEADER = ["Epoch", "Learn rate", "Avg Train loss", "Avg Train acc", "Avg Eval loss", "Avg Eval acc"]
+CSV_HEADER = ["Epoch", "Learn rate", "Avg Train loss", "Avg Train Add loss", "Avg Train acc", "Avg Eval loss", "Avg Eval Add loss", "Avg Eval acc"]
 
 # Baseline is an untrained epoch that we evaluate as a baseline loss and accuracy
 BASELINE_EPOCH = -1
@@ -144,8 +144,8 @@ def main():
             print("Baseline model evaluation (Epoch 0):")
 
         # Eval
-        train_loss, train_acc = eval_reconstructor_model(model, train_loader, train_loss_func)
-        eval_loss, eval_acc = eval_reconstructor_model(model, test_loader, eval_loss_func)
+        train_loss, train_acc, train_add_loss = eval_reconstructor_model(model, train_loader, train_loss_func)
+        eval_loss, eval_acc, eval_add_loss = eval_reconstructor_model(model, test_loader, eval_loss_func)
 
         # Learn rate
         lr = get_lr(opt)
@@ -153,6 +153,8 @@ def main():
         print("Epoch:", epoch+1)
         print("Avg train loss:", train_loss)
         print("Avg eval loss:", eval_loss)
+        print("Avg train add loss:", train_add_loss)
+        print("Avg eval add loss:", eval_add_loss)
         print("Avg train acc:", train_acc)
         print("Avg eval acc:", eval_acc)
         print(SEPERATOR)
@@ -189,7 +191,7 @@ def main():
 
         with open(results_file, "a", newline="") as o_stream:
             writer = csv.writer(o_stream)
-            writer.writerow([epoch+1, lr, train_loss, train_acc, eval_loss, eval_acc])
+            writer.writerow([epoch+1, lr, train_loss, train_add_loss, train_acc, eval_loss, eval_add_loss, eval_acc])
 
 
     return

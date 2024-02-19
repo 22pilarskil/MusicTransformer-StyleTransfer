@@ -47,7 +47,7 @@ class MusicTransformer(nn.Module):
         self.reduction_factor = reduction_factor
         self.transition_features = transition_features
         
-        adjusted_vocab_size = VOCAB_SIZE # Account for added start token
+        adjusted_vocab_size = VOCAB_SIZE - 1 # Account for added start token
         # Input embedding
         self.embedding = nn.Embedding(adjusted_vocab_size, self.d_model)
 

@@ -31,9 +31,6 @@ def create_triplet_mask(labels):
     # Initialize empty mask
     num_labels = len(labels)
     valid_triplets = torch.zeros((num_labels, num_labels, num_labels), dtype=torch.bool)
-    print(valid_triplets.shape)
-    print(labels)
-    print(len(labels))
     for i in range(num_labels):
         for j in range(num_labels):
             if i == j:
@@ -44,10 +41,7 @@ def create_triplet_mask(labels):
                 # Mark as valid if i and j share at least one label, but k has no overlap with i
                 if not set(labels[i].numpy()).isdisjoint(set(labels[j].numpy())) and set(labels[i].numpy()).isdisjoint(set(labels[k].numpy())):
                     valid_triplets[i, j, k] = True
-                    print(labels[i], labels[j], labels[k], "\n")
     valid_triplets = valid_triplets.nonzero(as_tuple=False)
-    print(valid_triplets.shape)
-    raise ValueError()
     return valid_triplets
 
 

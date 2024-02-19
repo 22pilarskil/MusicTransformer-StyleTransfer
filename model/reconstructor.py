@@ -21,7 +21,7 @@ class Reconstructor(nn.Module):
         super(Reconstructor, self).__init__()
 
         self.dummy      = DummyDecoder()
-
+        print("NLAYERS", n_layers)
         self.nlayers    = n_layers
         self.nhead      = num_heads
         self.d_model    = d_model
@@ -33,23 +33,19 @@ class Reconstructor(nn.Module):
 
         self.embedding = nn.Embedding(VOCAB_SIZE, self.d_model)
         self.positional_encoding = PositionalEncoding(self.d_model, self.dropout, self.max_seq)
-        self.linear_embeddings = nn.Linear(256, d_model)
 
-        self.cross_attn = MultiheadAttentionRPR(self.d_model, self.nhead, self.dropout)
-        self.cross_attn_layer_norm = LayerNorm(d_model) 
-
-        encoder_norm = LayerNorm(self.d_model)
-        encoder_layer = TransformerEncoderLayerRPR(self.d_model, self.nhead, self.d_ff, self.dropout, er_len=self.max_seq)
+        encoder_norm = LayerNorm(self.d_model + 256)
+        encoder_layer = TransformerEncoderLayerRPR(self.d_model + 256, self.nhead, self.d_ff, self.dropout, er_len=self.max_seq)
         encoder = TransformerEncoderRPR(encoder_layer, self.nlayers, encoder_norm)
 
         self.transformer = nn.Transformer(
-            d_model=self.d_model, nhead=self.nhead, num_encoder_layers=self.nlayers,
+            d_model=self.d_model + 256, nhead=self.nhead, num_encoder_layers=self.nlayers,
             num_decoder_layers=0, dropout=self.dropout, # activation=self.ff_activ,
             dim_feedforward=self.d_ff, custom_decoder=self.dummy, custom_encoder=encoder
         )
 
         # Final output is a softmaxed linear layer
-        self.Wout       = nn.Linear(self.d_model, VOCAB_SIZE)
+        self.Wout       = nn.Linear(self.d_model + 256, VOCAB_SIZE)
         self.softmax    = nn.Softmax(dim=-1)
 
     def forward(self, x, style_embedding, content_embedding, mask=True):
@@ -72,23 +68,20 @@ class Reconstructor(nn.Module):
         x = self.embedding(x)
         x = x.permute(1, 0, 2)
         x = self.positional_encoding(x)
-
         embeddings = torch.cat([style_embedding, content_embedding], dim=1)
-        embeddings = self.linear_embeddings(embeddings)  # Shape: (batch_size, d_model)
-        embeddings = embeddings.unsqueeze(1).repeat(1, seq_length, 1) # Shape: (1, batch_size, d_model)
 
-        attn_output, attn_weights = self.cross_attn(query=x, key=embeddings, value=embeddings)
-        attn_output = self.cross_attn_layer_norm(attn_output)
-        x_out = self.transformer(src=attn_output, tgt=attn_output, src_mask=mask)
+        embeddings_expanded = embeddings.unsqueeze(1).expand(-1, 1000, -1)  # Expands without copying data
+        embeddings_expanded = embeddings_expanded.permute(1, 0, 2)  # Now it's (1000, batch_size, 256)
+        x_with_embeddings = torch.cat([x, embeddings_expanded], dim=2)
 
+        x_out = self.transformer(src=x_with_embeddings, tgt=x_with_embeddings, src_mask=mask)
         x_out = x_out.permute(1, 0, 2)
         y = self.Wout(x_out)
-        
         del mask
         return y
 
 
-    def generate(self, style_embedding, content_embedding, content_midi, num_primer, target_seq_length=1000):
+    def generate(self, style_embedding, content_embedding, content_midi, num_primer, target_seq_length=1000, beam=0, beam_chance=1.0):
         assert (not self.training), "Cannot generate while in training mode"
 
         print("Generating sequence of max length:", target_seq_length)
@@ -97,29 +90,26 @@ class Reconstructor(nn.Module):
         gen_seq = torch.full((content_midi.shape[0], target_seq_length), TOKEN_PAD, dtype=TORCH_LABEL_TYPE, device=get_device())
         gen_seq[..., :num_primer] = content_midi[..., :num_primer]
         gen_seq[..., 0] = TOKEN_START
+
         cur_i = num_primer  # Start from index 1 as the first token is TOKEN_START
-
-        y = self.forward(gen_seq, style_embedding, content_embedding)
-        y   = y.reshape(y.shape[0] * y.shape[1], -1)
-
         while(cur_i < target_seq_length):
-            gen_seq[..., num_primer] = TOKEN_END
-            y = self.forward(gen_seq, style_embedding, content_embedding)[..., :(TOKEN_END + 1)]
-            
-            y = torch.argmax(y, dim=-1)
-            next_token = y[:, cur_i-1]
-            
+
+            y = self.softmax(self.forward(gen_seq, style_embedding, content_embedding)[..., :TOKEN_END])
+
+            token_probs = y[:, cur_i-1, :]
+
+            # Select the most probable token using argmax
+            next_token = torch.argmax(token_probs, dim=-1)
+
             # Select the argmax of the logits
-            '''
-            print(y.shape)
+            
             y = self.softmax(y)
             token_probs = y[:, cur_i-1, :]
             distrib = torch.distributions.categorical.Categorical(probs=token_probs)
             next_token = distrib.sample()
-            print(next_token)
-            '''
-            gen_seq[:, cur_i] = next_token
 
+
+            gen_seq[:, cur_i] = next_token            
             # Check for the end of sequence token
             '''
             if(next_token == TOKEN_END):
